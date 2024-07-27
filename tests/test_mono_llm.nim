@@ -2,12 +2,15 @@ import
   std/[unittest, options, os],
   mono_llm, jsony, vertex_leap
 
+const OllamaTestModel = "llama3.1:8b"
 
 suite "mono_llm":
   var monoLLM: MonoLLM
   test "init":
 
-    var config = MonoLLMConfig()
+    var config = MonoLLMConfig(
+      ollamaBaseUrl: "http://localhost:11434/api",
+    )
 
     let credentialPath = os.getEnv("GOOGLE_APPLICATION_CREDENTIALS", "")
     if credentialPath == "":
@@ -18,4 +21,15 @@ suite "mono_llm":
     assert monoLLM.ollama != nil
     assert monoLLM.openai != nil
     assert monoLLM.vertexai != nil
-    
+  
+  test "ollama":
+    let chat = Chat(
+      model: OllamaTestModel,
+      provider: ChatProvider.ollama,
+      messages: @[
+        ChatMessage(role: Role.system, content: "You are longbeard the llama. Please respond as a pirate."),
+        ChatMessage(role: Role.user, content: "Hello, how are you?")
+      ],
+    )
+    let resp = monoLLM.generateChat(chat)
+    echo resp.message
