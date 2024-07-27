@@ -10,3 +10,5 @@ nimcache
 *.ilk
 *.out
 .*
+
+tests/service_account.json
