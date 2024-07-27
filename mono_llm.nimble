@@ -1,0 +1,11 @@
+version     = "0.0.1"
+author      = "monofuel"
+description = "General LLM library"
+license     = "MIT"
+
+srcDir = "src"
+
+requires "nim >= 2.0.0"
+requires "https://github.com/monofuel/llama_leap >= 1.1.0"
+requires "https://github.com/monofuel/openai_leap >= 1.1.0"
+requires "https://github.com/monofuel/vertex_leap >= 0.0.5"
