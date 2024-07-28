@@ -60,6 +60,33 @@ role: {m.role}
 content: {m.content}
 """)
 
+proc prettyPrint*(ch: Chat) =
+  echo "-----------------"
+  var result = "ChatHistory:\n"
+  result.add "  Model: " & $ch.model & "\n"
+  result.add "  Provider: " & $ch.provider & "\n"
+  result.add "  Messages:\n"
+  for msg in ch.messages:
+    result.add "    Role: " & $msg.role & "\n"
+    if msg.content.isSome:
+      result.add "    Content: " & msg.content.get & "\n"
+    # TODO images
+  echo result
+
+proc copy*(original: Chat): Chat =
+  let json = toJson(original)
+  result = fromJson(json, Chat)
+
+proc systemMessage*(ch: Chat): string =
+  if ch.messages[0].role != Role.system:
+    raise newException(Exception, &"first message is not a system message")
+  result = ch.messages[0].content.get
+
+proc lastMessage*(ch: Chat): string =
+  result = ch.messages[ch.messages.len - 1].content.get
+
+
+
 type MonoLLMConfig* = object
   ollamaBaseUrl*: string
   gcpCredentials*: Option[GCPCredentials]
