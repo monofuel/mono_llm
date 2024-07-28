@@ -24,8 +24,8 @@ type
     json*: Option[bool] = option(false) # request json response (remember to also prompt for json)
   ChatMessage* = ref object
     role*: Role
-    content*: string
     name*: Option[string]
+    content*: Option[string]        # either content, image, or imageUrl must be set
     images*: Option[seq[string]]    # sequence of base64 encoded images
     imageUrls*: Option[seq[string]] # sequence of urls to images
   ChatExample* = ref object
@@ -99,25 +99,87 @@ proc newMonoLLM*(): MonoLLM =
 
 
 
-proc generateOpenAIChat(llm: MonoLLM, modelname: string, chat: Chat): ChatResp =
+proc generateOpenAIChat(llm: MonoLLM, chat: Chat): ChatResp =
+  var messages: seq[openai_leap.Message]
+  for msg in chat.messages:
+
+    var contentParts: seq[MessageContentPart]
+    if msg.content.isSome:
+      contentParts.add(MessageContentPart(
+        `type`: "text",
+        text: msg.content
+      ))
+    if msg.imageUrls.isSome:
+      for url in msg.imageUrls.get:
+        contentParts.add(MessageContentPart(
+          `type`: "image_url",
+          image_url: option(url)
+        ))
+    if msg.images.isSome:
+      if msg.images.get.len > 0:
+        # TODO implement non-url images for openai api
+        # could either: run a web server and service the image, or use the 'create upload' api
+        # would need to keep track of what images have been uploaded
+        raise newException(Exception, "OpenAI image upload not implemented yet, please use image_url for now")
+
+    messages.add(openai_leap.Message(
+      role: $msg.role,
+      content: option(contentParts)
+    ))
+
+  var req = CreateChatCompletionReq(
+    model: chat.model,
+    messages: messages,
+  )
+
+  req.seed = chat.params.seed
+  req.top_p = chat.params.top_p
+  # top_k?
+  req.temperature = chat.params.temperature
+  if chat.params.json.isSome and chat.params.json.get:
+    req.response_format = option(
+      ResponseFormatObj(
+        `type`: "json"
+      )
+    )
+
+
+  let resp = llm.openai.createChatCompletion(req)
+  result = ChatResp(
+    message: resp.choices[0].message.content,
+    inputTokens: resp.usage.prompt_tokens,
+    outputTokens: resp.usage.total_tokens - resp.usage.prompt_tokens,
+    totalTokens: resp.usage.total_tokens,
+  )
+
+
+
+
+proc generateVertexAIChat(llm: MonoLLM, chat: Chat): ChatResp =
+
   echo "TODO"
 
-proc generateVertexAIChat(llm: MonoLLM, modelname: string, chat: Chat): ChatResp =
-  echo "TODO"
 
-proc generateOllamaChat(llm: MonoLLM, modelname: string, chat: Chat): ChatResp =
+
+proc generateOllamaChat(llm: MonoLLM, chat: Chat): ChatResp =
 
   var messages: seq[llama_leap.ChatMessage]
 
   for msg in chat.messages:
+
+    if msg.imageUrls.isSome:
+      # TODO could perform this automatically by downloading image
+      raise newException(Exception, "Ollama does not support image urls, please use base64 images")
+
+    # TODO does this work for image-only messages?
     messages.add(llama_leap.ChatMessage(
       role: $msg.role,
-      content: msg.content,
+      content: msg.content.get,
       images: msg.images
     ))
 
   let req = ChatReq(
-    model: modelname,
+    model: chat.model,
     messages: messages,
     format: if chat.params.json.isSome and chat.params.json.get:
       option("json") else: none(string),
@@ -146,7 +208,10 @@ proc generateChat*(llm: MonoLLM, chat: Chat, debugPrint: bool = true): ChatResp 
   var msgCharSum = 0
   var imageCount = 0
   for msg in chat.messages:
-    msgCharSum += msg.content.len
+    if msg.content.isSome:
+      msgCharSum += msg.content.get.len
+    if msg.images.isSome:
+      imageCount += msg.images.get.len
     if msg.imageUrls.isSome:
       imageCount += msg.imageUrls.get.len
   let tokenEst = estTokenCount(msgCharSum)
@@ -163,11 +228,11 @@ proc generateChat*(llm: MonoLLM, chat: Chat, debugPrint: bool = true): ChatResp 
 
   case chat.provider:
     of ChatProvider.ollama:
-      return llm.generateOllamaChat(chat.model, chat)
+      return llm.generateOllamaChat(chat)
     of ChatProvider.openai:
-      return llm.generateOpenAIChat(chat.model, chat)
+      return llm.generateOpenAIChat(chat)
     of ChatProvider.vertexai:
-      return llm.generateVertexAIChat(chat.model, chat)
+      return llm.generateVertexAIChat(chat)
     else:
       raise newException(Exception, &"Could not find model chat handler {chat.provider}")
 
