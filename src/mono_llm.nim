@@ -54,7 +54,6 @@ proc `$`*(c: Chat): string =
 # {c.model}
 {toJson(c.params)}
 """
-  # TODO context + examples
   for m in c.messages:
     result.add(&"""
 role: {m.role}
@@ -185,8 +184,8 @@ proc generateVertexAIChat(llm: MonoLLM, chat: Chat): ChatResp =
     var parts: seq[GeminiProContentPart]
     if msg.content.isSome:
       parts.add(GeminiProContentPart(text: option(msg.content.get)))
-    # NB. vertexAI does not like it when there is an image part but no text parts
-    
+      # NB. vertexAI does not like it when there is an image part but no text parts
+
     if msg.imageUrls.isSome:
       for url in msg.imageUrls.get:
         # Gemini Pro only supports image urls from GCS
@@ -288,6 +287,17 @@ proc generateOllamaChat(llm: MonoLLM, chat: Chat): ChatResp =
 # TODO work out a tool usage interface
 # TODO work out a dynamic rag interface
 
+proc guessProvider*(model: string): ChatProvider =
+  if model.contains("gpt"):
+    return ChatProvider.openai
+  elif model.contains("gemini"):
+    return ChatProvider.vertexai
+  elif model.contains("llama") or
+    model.contains("nomic-embed-text"):
+    return ChatProvider.ollama
+  else:
+    raise newException(Exception, &"Could not guess provider for model {model}, please provide in chat object")
+
 proc generateChat*(llm: MonoLLM, chat: Chat, debugPrint: bool = true): ChatResp =
 
   # checks around token usage and limits
@@ -307,10 +317,10 @@ proc generateChat*(llm: MonoLLM, chat: Chat, debugPrint: bool = true): ChatResp 
     if imageCount > 0:
       echo &"DEBUG: chat: {chat.model}, images: {imageCount}"
 
-  # TODO could make a provider guessing system
-  # gpt -> openai, gemini -> vertex, llama -> ollama
-
   # TODO adding new message to chat object
+
+  if chat.provider == ChatProvider.invalid_provider:
+    chat.provider = guessProvider(chat.model)
 
   case chat.provider:
     of ChatProvider.ollama:
