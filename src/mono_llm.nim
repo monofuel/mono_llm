@@ -158,39 +158,6 @@ proc generateOpenAIChat(llm: MonoLLM, chat: Chat): ChatResp =
 proc generateVertexAIChat(llm: MonoLLM, chat: Chat): ChatResp =
   # primarily focused on gemini pro
   # chat bison / palm 2 have different features, but I don't think we need to support them going forward
-
-  # let req = GeminiProRequest(
-  #   generationConfig: GeminiProGenerationConfig(
-  #     temperature: 0.2,
-  #     topP: 0.8,
-  #     topK: 40
-  #   ),
-  #   contents: @[
-  #     GeminiProContents(
-  #       role: "user",
-  #       parts: @[
-  #         GeminiProContentPart(text: option(prompt))
-  #       ]
-  #     )
-  #   ]
-  # )
-
-  # if system != "":
-  #   req.systemInstruction = option(
-  #     GeminiProSystemInstruction(
-  #       parts: @[GeminiProContentPart(text: option(system))]
-  #     )
-  #   )
-  # if image != "":
-  #   let imgPart =
-  #       GeminiProContentPart(
-  #         fileData: option(GeminiProFileData(
-  #           mimeType: "image/jpeg",
-  #           fileUri: image
-  #         ))
-  #       )
-  #   req.contents[0].parts.add(imgPart)
-
   var req = GeminiProRequest()
 
   if chat.messages[0].role == Role.system:
