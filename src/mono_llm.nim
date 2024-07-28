@@ -156,9 +156,101 @@ proc generateOpenAIChat(llm: MonoLLM, chat: Chat): ChatResp =
 
 
 proc generateVertexAIChat(llm: MonoLLM, chat: Chat): ChatResp =
+  # primarily focused on gemini pro
+  # chat bison / palm 2 have different features, but I don't think we need to support them going forward
 
-  echo "TODO"
+  # let req = GeminiProRequest(
+  #   generationConfig: GeminiProGenerationConfig(
+  #     temperature: 0.2,
+  #     topP: 0.8,
+  #     topK: 40
+  #   ),
+  #   contents: @[
+  #     GeminiProContents(
+  #       role: "user",
+  #       parts: @[
+  #         GeminiProContentPart(text: option(prompt))
+  #       ]
+  #     )
+  #   ]
+  # )
 
+  # if system != "":
+  #   req.systemInstruction = option(
+  #     GeminiProSystemInstruction(
+  #       parts: @[GeminiProContentPart(text: option(system))]
+  #     )
+  #   )
+  # if image != "":
+  #   let imgPart =
+  #       GeminiProContentPart(
+  #         fileData: option(GeminiProFileData(
+  #           mimeType: "image/jpeg",
+  #           fileUri: image
+  #         ))
+  #       )
+  #   req.contents[0].parts.add(imgPart)
+
+  var req = GeminiProRequest()
+
+  if chat.messages[0].role == Role.system:
+    let systemPrompt = chat.messages[0].content.get
+
+    req.systemInstruction = option(
+      GeminiProSystemInstruction(
+        parts: @[GeminiProContentPart(text: option(systemPrompt))]
+      )
+    )
+
+  for msg in chat.messages:
+    if msg.role == Role.system:
+      continue
+    
+    # TODO should not assume image/jpeg
+    var parts: seq[GeminiProContentPart]
+    if msg.content.isSome:
+      parts.add(GeminiProContentPart(text: option(msg.content.get)))
+    if msg.imageUrls.isSome:
+      for url in msg.imageUrls.get:
+        parts.add(GeminiProContentPart(
+          fileData: option(GeminiProFileData(
+            mimeType: "image/jpeg",
+            fileUri: url
+          ))
+        ))
+    if msg.images.isSome:
+      for img in msg.images.get:
+        parts.add(GeminiProContentPart(
+          inlineData: option(GeminiProInlineData(
+            mimeType: "image/jpeg",
+            data: img
+          ))
+        ))
+    req.contents.add(GeminiProContents(
+      role: $msg.role,
+      parts: parts
+    ))
+
+  # TODO were these 3 fields optional in vertexai api?
+  req.generationConfig = GeminiProGenerationConfig(
+    temperature: chat.params.temperature.get,
+    topP: chat.params.top_p.get,
+    topK: chat.params.top_k.get
+  )
+  
+  # TODO safety settings
+
+  let resp = llm.vertexai.geminiProGenerate(chat.model, req)
+
+  var msg = ""
+  for part in resp.candidates[0].content.parts:
+    msg.add(part.text.get)
+  result = ChatResp(
+    message: msg,
+    inputTokens: resp.usageMetadata.promptTokenCount,
+    outputTokens: resp.usageMetadata.candidatesTokenCount,
+    totalTokens: resp.usageMetadata.totalTokenCount,
+  )
 
 
 proc generateOllamaChat(llm: MonoLLM, chat: Chat): ChatResp =

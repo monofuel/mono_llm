@@ -5,6 +5,7 @@ import
 const
   OllamaTestModel = "llama3.1:8b"
   OpenAITestModel = "gpt-4o-mini"
+  VertexAITestModel = "gemini-1.5-flash"
 
 suite "mono_llm":
   var monoLLM: MonoLLM
@@ -40,6 +41,18 @@ suite "mono_llm":
     let chat = Chat(
       model: OpenAITestModel,
       provider: ChatProvider.openai,
+      messages: @[
+        ChatMessage(role: Role.system, content: option("You are longbeard the llama. Please respond as a pirate.")),
+        ChatMessage(role: Role.user, content: option("Hello, how are you?"))
+      ],
+    )
+    let resp = monoLLM.generateChat(chat)
+    echo resp.message
+
+  test "vertexai":
+    let chat = Chat(
+      model: VertexAITestModel,
+      provider: ChatProvider.vertexai,
       messages: @[
         ChatMessage(role: Role.system, content: option("You are longbeard the llama. Please respond as a pirate.")),
         ChatMessage(role: Role.user, content: option("Hello, how are you?"))
