@@ -1,7 +1,9 @@
 
 import
-  std/[os, options, strformat],
-  jsony, llama_leap, vertex_leap, openai_leap
+  std/[os, options, strutils, strformat, base64],
+  jsony, curly, llama_leap, vertex_leap, openai_leap
+
+let curlPool = newCurlPool(4)
 
 # These mono_llm types are an intermediate representation that is converted for each API
 type
@@ -111,9 +113,12 @@ proc generateOpenAIChat(llm: MonoLLM, chat: Chat): ChatResp =
       ))
     if msg.imageUrls.isSome:
       for url in msg.imageUrls.get:
+        let imageUrl = ImageUrlPart(
+          url: url
+        )
         contentParts.add(MessageContentPart(
           `type`: "image_url",
-          image_url: option(url)
+          image_url: option(imageUrl)
         ))
     if msg.images.isSome:
       if msg.images.get.len > 0:
@@ -165,7 +170,10 @@ proc generateVertexAIChat(llm: MonoLLM, chat: Chat): ChatResp =
 
     req.systemInstruction = option(
       GeminiProSystemInstruction(
-        parts: @[GeminiProContentPart(text: option(systemPrompt))]
+        role: $Role.system, # this field is ignored by the API
+        parts: @[GeminiProContentPart(
+          text: option(systemPrompt))
+          ]
       )
     )
 
@@ -177,14 +185,29 @@ proc generateVertexAIChat(llm: MonoLLM, chat: Chat): ChatResp =
     var parts: seq[GeminiProContentPart]
     if msg.content.isSome:
       parts.add(GeminiProContentPart(text: option(msg.content.get)))
+    # NB. vertexAI does not like it when there is an image part but no text parts
+    
     if msg.imageUrls.isSome:
       for url in msg.imageUrls.get:
-        parts.add(GeminiProContentPart(
-          fileData: option(GeminiProFileData(
-            mimeType: "image/jpeg",
-            fileUri: url
+        # Gemini Pro only supports image urls from GCS
+        if url.startsWith("gs://"):
+          parts.add(GeminiProContentPart(
+            fileData: option(GeminiProFileData(
+              mimeType: "image/jpeg",
+              fileUri: url
+            ))
           ))
-        ))
+        else:
+          # if we are given a non-gcs url, fetch the image and upload it base64 instead
+          let img = curlPool.get(url)
+          let imgbase64 = img.body.encode()
+          parts.add(GeminiProContentPart(
+            inlineData: option(GeminiProInlineData(
+              mimeType: "image/jpeg",
+              data: imgbase64
+            ))
+          ))
+
     if msg.images.isSome:
       for img in msg.images.get:
         parts.add(GeminiProContentPart(
@@ -226,14 +249,18 @@ proc generateOllamaChat(llm: MonoLLM, chat: Chat): ChatResp =
 
   for msg in chat.messages:
 
+    var images = msg.images
     if msg.imageUrls.isSome:
-      # TODO could perform this automatically by downloading image
-      raise newException(Exception, "Ollama does not support image urls, please use base64 images")
+      if images.isNone:
+        images = option[seq[string]](@[])
+      for url in msg.imageUrls.get:
+        ## fetch the image and add base64 to images
+        let img = curlPool.get(url)
+        images.get.add(img.body.encode())
 
-    # TODO does this work for image-only messages?
     messages.add(llama_leap.ChatMessage(
       role: $msg.role,
-      content: msg.content.get,
+      content: msg.content,
       images: msg.images
     ))
 
@@ -252,7 +279,7 @@ proc generateOllamaChat(llm: MonoLLM, chat: Chat): ChatResp =
   let resp = llm.ollama.chat(req)
 
   result = ChatResp(
-    message: resp.message.content,
+    message: resp.message.content.get,
     inputTokens: resp.prompt_eval_count,
     outputTokens: resp.eval_count - resp.prompt_eval_count,
     totalTokens: resp.eval_count
