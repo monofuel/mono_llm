@@ -317,20 +317,25 @@ proc generateChat*(llm: MonoLLM, chat: Chat, debugPrint: bool = true): ChatResp 
     if imageCount > 0:
       echo &"DEBUG: chat: {chat.model}, images: {imageCount}"
 
-  # TODO adding new message to chat object
-
   if chat.provider == ChatProvider.invalid_provider:
     chat.provider = guessProvider(chat.model)
 
   case chat.provider:
     of ChatProvider.ollama:
-      return llm.generateOllamaChat(chat)
+      result = llm.generateOllamaChat(chat)
     of ChatProvider.openai:
-      return llm.generateOpenAIChat(chat)
+      result = llm.generateOpenAIChat(chat)
     of ChatProvider.vertexai:
-      return llm.generateVertexAIChat(chat)
+      result = llm.generateVertexAIChat(chat)
     else:
       raise newException(Exception, &"Could not find model chat handler {chat.provider}")
+
+  # mutate the provided chat object with the response
+  let chatResp = ChatMessage(
+    role: Role.assistant,
+    content: option(result.message)
+  )
+  chat.messages.add(chatResp)
 
 
 # proc generateEmbeddings*(model: string, provider: string,
