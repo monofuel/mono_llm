@@ -90,15 +90,20 @@ proc lastMessage*(ch: Chat): string =
 type MonoLLMConfig* = object
   ollamaBaseUrl*: string
   gcpCredentials*: Option[GCPCredentials]
+  openAIKey*: string
 
 proc newMonoLLM*(config: MonoLLMConfig): MonoLLM =
   result = MonoLLM()
   # Default to using localhost ollama w/o credentials
   result.ollama = newOllamaApi(baseUrl = config.ollamaBaseUrl)
 
-  # openai_leap loads from OPENAI_API_KEY by default
+
+  if config.openAIKey != "":
+    result.openai = newOpenAIApi(apiKeyParam = config.openAIKey)
   if getEnv("OPENAI_API_KEY").len > 0:
+    # openai_leap loads from OPENAI_API_KEY by default
     result.openai = newOpenAIApi()
+  
 
   if config.gcpCredentials.isSome:
     result.vertexai = newVertexAIApi(credentials = config.gcpCredentials)
