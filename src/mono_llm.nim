@@ -207,10 +207,14 @@ proc generateOpenAIChat(llm: MonoLLM, chat: Chat, tools: seq[Tool] = @[], toolFn
       )
     ))
 
+
+  var toolsOption = none(seq[openai_leap.ToolCall])
+  if gptTools.len > 0:
+    toolsOption = option(gptTools)
   var req = CreateChatCompletionReq(
     model: chat.model,
     messages: messages,
-    tools: option(gptTools),
+    tools: toolsOption,
     toolChoice: option(% "auto")
   )
 
