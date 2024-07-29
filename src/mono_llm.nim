@@ -160,7 +160,7 @@ proc newMonoLLM*(): MonoLLM =
 
 
 
-proc generateOpenAIChat(llm: MonoLLM, chat: Chat, tools: seq[Tool] = @[]): ChatResp =
+proc generateOpenAIChat(llm: MonoLLM, chat: Chat, tools: seq[Tool] = @[], toolFns: Table[string, ToolImpl]): ChatResp =
   var messages: seq[openai_leap.Message]
   for msg in chat.messages:
 
@@ -191,11 +191,27 @@ proc generateOpenAIChat(llm: MonoLLM, chat: Chat, tools: seq[Tool] = @[]): ChatR
       content: option(contentParts)
     ))
 
-  # TODO implement tool usage
+  var gptTools: seq[openai_leap.ToolCall]
+  for tool in tools:
+    gptTools.add(openai_leap.ToolCall(
+      `type`: "function",
+      function: openai_leap.ToolFunction(
+        name: tool.name,
+        description: option(tool.description),
+        parameters: option(%* {
+          "type": "object",
+          "properties": tool.parameters.properties,
+          "required": tool.parameters.required
+          }
+        )
+      )
+    ))
 
   var req = CreateChatCompletionReq(
     model: chat.model,
     messages: messages,
+    tools: option(gptTools),
+    toolChoice: option(% "auto")
   )
 
   req.seed = chat.params.seed
@@ -210,7 +226,44 @@ proc generateOpenAIChat(llm: MonoLLM, chat: Chat, tools: seq[Tool] = @[]): ChatR
     )
 
 
-  let resp = llm.openai.createChatCompletion(req)
+  var resp = llm.openai.createChatCompletion(req)
+  
+  while resp.choices[0].message.tool_calls.isSome and resp.choices[0].message.tool_calls.get.len > 0:
+    let toolMsg = resp.choices[0].message
+    messages.add(openai_leap.Message(
+      role: $Role.assistant,
+      tool_calls: toolMsg.tool_calls,
+      content: option(@[
+        MessageContentPart(
+          `type`: "text",
+          text: option(resp.choices[0].message.content)
+        )
+      ])
+    ))
+
+    let toolFunc = toolMsg.tool_calls.get[0].function
+    let toolFn = toolFns[toolFunc.name]
+    let toolFuncArgs = fromJson(toolFunc.arguments)
+    let toolResult = toolFn(toolFuncArgs)
+    messages.add(Message(
+        role: "tool",
+        content: option(
+          @[MessageContentPart(`type`: "text", text: option(
+            toolResult
+          ))]
+          ),
+        tool_call_id: option(toolMsg.tool_calls.get[0].id)
+      ))
+
+    req = CreateChatCompletionReq(
+      model: chat.model,
+      messages: messages,
+      tools: option(gptTools),
+      toolChoice: option(% "auto")
+    )
+
+    resp = llm.openai.createChatCompletion(req)
+
   result = ChatResp(
     message: resp.choices[0].message.content,
     inputTokens: resp.usage.prompt_tokens,
@@ -219,7 +272,7 @@ proc generateOpenAIChat(llm: MonoLLM, chat: Chat, tools: seq[Tool] = @[]): ChatR
   )
 
 
-proc generateVertexAIChat(llm: MonoLLM, chat: Chat, tools: seq[Tool] = @[]): ChatResp =
+proc generateVertexAIChat(llm: MonoLLM, chat: Chat, tools: seq[Tool] = @[], toolFns: Table[string, ToolImpl]): ChatResp =
   # primarily focused on gemini pro
   # chat bison / palm 2 have different features, but I don't think we need to support them going forward
   var req = GeminiProRequest()
@@ -439,9 +492,9 @@ proc generateChat*(llm: MonoLLM, chat: Chat): ChatResp =
     of ChatProvider.ollama:
       result = llm.generateOllamaChat(chat, tools, toolFns)
     of ChatProvider.openai:
-      result = llm.generateOpenAIChat(chat, tools)
+      result = llm.generateOpenAIChat(chat, tools, toolFns)
     of ChatProvider.vertexai:
-      result = llm.generateVertexAIChat(chat, tools)
+      result = llm.generateVertexAIChat(chat, tools, toolFns)
     else:
       raise newException(Exception, &"Could not find model chat handler {chat.provider}")
 
