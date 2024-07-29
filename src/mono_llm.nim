@@ -1,6 +1,6 @@
 
 import
-  std/[os, options, strutils, strformat, base64],
+  std/[os, tables, options, json, strutils, strformat, base64],
   jsony, curly, llama_leap, vertex_leap, openai_leap
 
 let curlPool = newCurlPool(4)
@@ -24,30 +24,58 @@ type
     top_p*: Option[float32] = option(0.9f)
     top_k*: Option[int] = option(40)
     json*: Option[bool] = option(false) # request json response (remember to also prompt for json)
+  ToolCall* = ref object
+    name*: string
+    arguments*: string # JSON string of arguments
   ChatMessage* = ref object
     role*: Role
     name*: Option[string]
-    content*: Option[string]        # either content, image, or imageUrl must be set
-    images*: Option[seq[string]]    # sequence of base64 encoded images
-    imageUrls*: Option[seq[string]] # sequence of urls to images
+    content*: Option[string]           # either content, image, or imageUrl must be set
+    images*: Option[seq[string]]       # sequence of base64 encoded images
+    imageUrls*: Option[seq[string]]    # sequence of urls to images
+    toolCalls*: Option[seq[ToolCall]]  # Tools the LLM is calling
   ChatExample* = ref object
     input*: ChatMessage
     output*: ChatMessage
+  ToolFunctionParameters* = object
+    properties*: JsonNode  # JSON Schema of arguments
+    required*: seq[string] # arguments that are required
+  Tool* = ref object
+    name*: string
+    description*: string
+    parameters*: ToolFunctionParameters
   Chat* = ref object
     model*: string         # agent/model:version
     provider*: ChatProvider             # openai, ollama, vertexai
     params*: ChatParams = ChatParams()
     messages*: seq[ChatMessage]
+    tools*: seq[Tool]
   ChatResp* = ref object
     message*: string
     inputTokens*: int
     outputTokens*: int
     totalTokens*: int
+  EmbeddingVector* = seq[float64]
+
+type
+  Agent* = ref object
+    name*: string
+    systemPrompt*: string
+    tools*: Table[string, Tool]
 
 type MonoLLM* = ref object
   ollama*: OllamaAPI
   openai*: OpenAIAPI
   vertexai*: VertexAIAPI
+  agents*: Table[string, Agent]
+
+proc addAgent*(llm: MonoLLM, agent: Agent) = 
+  llm.agents[agent.name] = agent
+
+proc getTools*(agent: Agent): seq[Tool] =
+  result = @[]
+  for tool in agent.tools.values:
+    result.add(tool)
 
 proc `$`*(c: Chat): string =
   result = &"""
@@ -322,7 +350,7 @@ proc generateOllamaChat(llm: MonoLLM, chat: Chat): ChatResp =
 proc guessProvider*(model: string): ChatProvider =
   if model.contains("gpt"):
     return ChatProvider.openai
-  elif model.contains("gemini"):
+  elif model.contains("gemini") or model.contains("gecko"):
     return ChatProvider.vertexai
   elif model.contains("llama") or
     model.contains("nomic-embed-text"):
@@ -370,10 +398,23 @@ proc generateChat*(llm: MonoLLM, chat: Chat, debugPrint: bool = true): ChatResp 
   chat.messages.add(chatResp)
 
 
-# proc generateEmbeddings*(model: string, provider: string,
-#     prompt: string): EmbeddingVector =
-#   if prompt == "":
-#     raise newException(Exception, "Empty prompt for getEmbedding")
-#   # TODO handle non ollama models
-#   let resp = ollama.generateEmbeddings($model, prompt)
-#   result = resp.embedding
+proc generateEmbeddings*(llm: MonoLLM, model: string, prompt: string, p: ChatProvider = ChatProvider.invalid_provider): EmbeddingVector =
+  if prompt == "":
+    raise newException(Exception, "Empty prompt for getEmbedding")
+
+  var provider = p
+  if provider == ChatProvider.invalid_provider:
+    provider = guessProvider(model)
+
+  case provider:
+    of ChatProvider.ollama:
+      let resp = llm.ollama.generateEmbeddings(model, prompt)
+      result = resp.embedding
+    of ChatProvider.openai:
+      let resp = llm.openai.generateEmbeddings(model, prompt)
+      result = resp.data[0].embedding
+    of ChatProvider.vertexai:
+      result = llm.vertexai.geckoTextEmbed(model, prompt)
+
+    else:
+      raise newException(Exception, &"Could not find model {model} embedding handler {provider}")
