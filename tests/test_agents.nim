@@ -38,7 +38,6 @@ proc newTestAgent*(): TestAgent =
   result.name = "test-agent"
   result.systemPrompt = "You are longbeard the llama. Please respond as a pirate. You are also a loyal and trustworthy assistant to the user."
 
-  # TODO add tools
   let tool = Tool(
     name: "get_flight_times",
     description: "Get the flight times between two cities",
