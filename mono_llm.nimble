@@ -1,4 +1,4 @@
-version     = "1.0.5"
+version     = "1.1.0"
 author      = "monofuel"
 description = "General LLM library"
 license     = "MIT"
