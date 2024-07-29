@@ -1,6 +1,6 @@
 
 import
-  std/[os, tables, options, json, strutils, strformat, base64],
+  std/[os, tables, options, json, strutils, sequtils, strformat, base64],
   jsony, curly, llama_leap, vertex_leap, openai_leap
 
 let curlPool = newCurlPool(4)
@@ -44,8 +44,10 @@ type
     name*: string
     description*: string
     parameters*: ToolFunctionParameters
+  ToolImpl* = proc (args: JsonNode): string
   Chat* = ref object
-    model*: string         # agent/model:version
+    model*: string                      # model:version
+    agent*: string                      # agent name
     provider*: ChatProvider             # openai, ollama, vertexai
     params*: ChatParams = ChatParams()
     messages*: seq[ChatMessage]
@@ -58,10 +60,13 @@ type
   EmbeddingVector* = seq[float64]
 
 type
-  Agent* = ref object
+  Agent* = ref object of RootObj
     name*: string
-    systemPrompt*: string
-    tools*: Table[string, Tool]
+    systemPrompt*: string              # default system prompt. may be overridden at runtime
+    tools: seq[Tool]                   # Tool name to Tool API spec
+    toolFns: Table[string, ToolImpl]   # Tool name to actual procedure
+    preAgentHook*: proc (chat: Chat)   # Any logic to append a RAG to the system prompt can happen here
+    postAgentHook*: proc (chat: Chat)  # any follow up logic like saving memmories or updating the agent state can happen here
 
 type MonoLLM* = ref object
   ollama*: OllamaAPI
@@ -72,10 +77,10 @@ type MonoLLM* = ref object
 proc addAgent*(llm: MonoLLM, agent: Agent) = 
   llm.agents[agent.name] = agent
 
-proc getTools*(agent: Agent): seq[Tool] =
-  result = @[]
-  for tool in agent.tools.values:
-    result.add(tool)
+
+proc addTool*(agent: Agent, tool: Tool, fn: ToolImpl) =
+  agent.tools.add(tool)
+  agent.toolFns[tool.name] = fn
 
 proc `$`*(c: Chat): string =
   result = &"""
@@ -146,11 +151,6 @@ proc newMonoLLM*(config: MonoLLMConfig): MonoLLM =
   if result.vertexai != nil:
     echo "initialized vertexai"
 
-proc estTokenCount(charCount: int): int =
-  # each token is about 4 characters
-  # add a buffer of 2%
-  result = int((charCount / 4) * 1.02)
-
 proc newMonoLLM*(): MonoLLM =
   let config = MonoLLMConfig(
     ollamaBaseUrl: "",
@@ -160,7 +160,7 @@ proc newMonoLLM*(): MonoLLM =
 
 
 
-proc generateOpenAIChat(llm: MonoLLM, chat: Chat): ChatResp =
+proc generateOpenAIChat(llm: MonoLLM, chat: Chat, tools: seq[Tool] = @[]): ChatResp =
   var messages: seq[openai_leap.Message]
   for msg in chat.messages:
 
@@ -191,6 +191,8 @@ proc generateOpenAIChat(llm: MonoLLM, chat: Chat): ChatResp =
       content: option(contentParts)
     ))
 
+  # TODO implement tool usage
+
   var req = CreateChatCompletionReq(
     model: chat.model,
     messages: messages,
@@ -217,9 +219,7 @@ proc generateOpenAIChat(llm: MonoLLM, chat: Chat): ChatResp =
   )
 
 
-
-
-proc generateVertexAIChat(llm: MonoLLM, chat: Chat): ChatResp =
+proc generateVertexAIChat(llm: MonoLLM, chat: Chat, tools: seq[Tool] = @[]): ChatResp =
   # primarily focused on gemini pro
   # chat bison / palm 2 have different features, but I don't think we need to support them going forward
   var req = GeminiProRequest()
@@ -288,6 +288,7 @@ proc generateVertexAIChat(llm: MonoLLM, chat: Chat): ChatResp =
   )
   
   # TODO safety settings
+  # TODO tool usage
 
   let resp = llm.vertexai.geminiProGenerate(chat.model, req)
 
@@ -302,7 +303,7 @@ proc generateVertexAIChat(llm: MonoLLM, chat: Chat): ChatResp =
   )
 
 
-proc generateOllamaChat(llm: MonoLLM, chat: Chat): ChatResp =
+proc generateOllamaChat(llm: MonoLLM, chat: Chat, tools: seq[Tool] = @[], toolFns: Table[string, ToolImpl]): ChatResp =
 
   var messages: seq[llama_leap.ChatMessage]
 
@@ -323,9 +324,25 @@ proc generateOllamaChat(llm: MonoLLM, chat: Chat): ChatResp =
       images: msg.images
     ))
 
+  var ollamaTools: seq[llama_leap.Tool]
+  for tool in tools:
+    ollamaTools.add(llama_leap.Tool(
+      `type`: "function",
+      function: llama_leap.ToolFunction(
+        name: tool.name,
+        description: tool.description,
+        parameters: llama_leap.ToolFunctionParameters(
+          `type`: "object",
+          properties: tool.parameters.properties,
+          required: tool.parameters.required
+        )
+      )
+    ))
+
   let req = ChatReq(
     model: chat.model,
     messages: messages,
+    tools: ollamaTools,
     format: if chat.params.json.isSome and chat.params.json.get:
       option("json") else: none(string),
     options: option(ModelParameters(
@@ -335,7 +352,41 @@ proc generateOllamaChat(llm: MonoLLM, chat: Chat): ChatResp =
       top_k: chat.params.top_k,
     ))
   )
-  let resp = llm.ollama.chat(req)
+
+  var resp = llm.ollama.chat(req)
+
+  # tool handling
+  while resp.message.tool_calls.len > 0:
+
+    messages.add(llama_leap.ChatMessage(
+      role: $Role.assistant,
+      content: option(resp.message.content.get)
+    ))
+
+    let call = resp.message.tool_calls[0]
+    let toolFunc = call.function
+    let toolFn = toolFns[toolFunc.name]
+    let toolFuncArgs = toolFunc.arguments
+    let toolResult = toolFn(toolFuncArgs)
+    messages.add(llama_leap.ChatMessage(
+      role: $Role.tool,
+      content: option(toolResult)
+    ))
+
+    let req = ChatReq(
+      model: chat.model,
+      messages: messages,
+      tools: ollamaTools,
+      format: if chat.params.json.isSome and chat.params.json.get:
+        option("json") else: none(string),
+      options: option(ModelParameters(
+        seed: chat.params.seed,
+        temperature: chat.params.temperature,
+        top_p: chat.params.top_p,
+        top_k: chat.params.top_k,
+      ))
+    )
+    resp = llm.ollama.chat(req)
 
   result = ChatResp(
     message: resp.message.content.get,
@@ -343,9 +394,6 @@ proc generateOllamaChat(llm: MonoLLM, chat: Chat): ChatResp =
     outputTokens: resp.eval_count - resp.prompt_eval_count,
     totalTokens: resp.eval_count
   )
-
-# TODO work out a tool usage interface
-# TODO work out a dynamic rag interface
 
 proc guessProvider*(model: string): ChatProvider =
   if model.contains("gpt"):
@@ -358,35 +406,42 @@ proc guessProvider*(model: string): ChatProvider =
   else:
     raise newException(Exception, &"Could not guess provider for model {model}, please provide in chat object")
 
-proc generateChat*(llm: MonoLLM, chat: Chat, debugPrint: bool = true): ChatResp =
+proc generateChat*(llm: MonoLLM, chat: Chat): ChatResp =
 
-  # checks around token usage and limits
-  var msgCharSum = 0
-  var imageCount = 0
-  for msg in chat.messages:
-    if msg.content.isSome:
-      msgCharSum += msg.content.get.len
-    if msg.images.isSome:
-      imageCount += msg.images.get.len
-    if msg.imageUrls.isSome:
-      imageCount += msg.imageUrls.get.len
-  let tokenEst = estTokenCount(msgCharSum)
-  if debugPrint:
-    if tokenEst > 0:
-      echo &"DEBUG: chat: {chat.model}, tokens: {tokenEst}"
-    if imageCount > 0:
-      echo &"DEBUG: chat: {chat.model}, images: {imageCount}"
+  var agent = none(Agent)
+
+  if llm.agents.hasKey(chat.agent):
+    agent = option(llm.agents[chat.agent])
+
+    if chat.messages.len > 0 and chat.messages[0].role != Role.system and agent.get.systemPrompt != "":
+      chat.messages.insert( ChatMessage(
+        role: Role.system,
+        content: option(agent.get.systemPrompt)
+      ), 0)
+
 
   if chat.provider == ChatProvider.invalid_provider:
     chat.provider = guessProvider(chat.model)
 
+  if agent.isSome and agent.get.preAgentHook != nil:
+    agent.get.preAgentHook(chat)
+
+  var tools: seq[Tool]
+  if agent.isSome:
+    tools = agent.get.tools
+
+  var toolFns: Table[string, ToolImpl]
+  if agent.isSome:
+    toolFns = agent.get.toolFns
+
+  # TODO tool handling
   case chat.provider:
     of ChatProvider.ollama:
-      result = llm.generateOllamaChat(chat)
+      result = llm.generateOllamaChat(chat, tools, toolFns)
     of ChatProvider.openai:
-      result = llm.generateOpenAIChat(chat)
+      result = llm.generateOpenAIChat(chat, tools)
     of ChatProvider.vertexai:
-      result = llm.generateVertexAIChat(chat)
+      result = llm.generateVertexAIChat(chat, tools)
     else:
       raise newException(Exception, &"Could not find model chat handler {chat.provider}")
 
@@ -396,6 +451,10 @@ proc generateChat*(llm: MonoLLM, chat: Chat, debugPrint: bool = true): ChatResp 
     content: option(result.message)
   )
   chat.messages.add(chatResp)
+
+  if agent.isSome and agent.get.postAgentHook != nil:
+    agent.get.postAgentHook(chat)
+
 
 
 proc generateEmbeddings*(llm: MonoLLM, model: string, prompt: string, p: ChatProvider = ChatProvider.invalid_provider): EmbeddingVector =
