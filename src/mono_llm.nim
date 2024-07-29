@@ -227,8 +227,12 @@ proc generateOpenAIChat(llm: MonoLLM, chat: Chat, tools: seq[Tool] = @[], toolFn
 
 
   var resp = llm.openai.createChatCompletion(req)
+
+  var resultMessage = ""
+
   
   while resp.choices[0].message.tool_calls.isSome and resp.choices[0].message.tool_calls.get.len > 0:
+    resultMessage.add(resp.choices[0].message.content)
     let toolMsg = resp.choices[0].message
     messages.add(openai_leap.Message(
       role: $Role.assistant,
@@ -264,8 +268,11 @@ proc generateOpenAIChat(llm: MonoLLM, chat: Chat, tools: seq[Tool] = @[], toolFn
 
     resp = llm.openai.createChatCompletion(req)
 
+  resultMessage.add(resp.choices[0].message.content)
+
+  # TODO token counting needs to be improved for tool calls
   result = ChatResp(
-    message: resp.choices[0].message.content,
+    message: resultMessage,
     inputTokens: resp.usage.prompt_tokens,
     outputTokens: resp.usage.total_tokens - resp.usage.prompt_tokens,
     totalTokens: resp.usage.total_tokens,
@@ -408,9 +415,11 @@ proc generateOllamaChat(llm: MonoLLM, chat: Chat, tools: seq[Tool] = @[], toolFn
 
   var resp = llm.ollama.chat(req)
 
+  var resultMessage = ""
+
   # tool handling
   while resp.message.tool_calls.len > 0:
-
+    resultMessage.add(resp.message.content.get)
     messages.add(llama_leap.ChatMessage(
       role: $Role.assistant,
       content: option(resp.message.content.get)
@@ -440,9 +449,9 @@ proc generateOllamaChat(llm: MonoLLM, chat: Chat, tools: seq[Tool] = @[], toolFn
       ))
     )
     resp = llm.ollama.chat(req)
-
+  resultMessage.add(resp.message.content.get)
   result = ChatResp(
-    message: resp.message.content.get,
+    message: resultMessage,
     inputTokens: resp.prompt_eval_count,
     outputTokens: resp.eval_count - resp.prompt_eval_count,
     totalTokens: resp.eval_count
