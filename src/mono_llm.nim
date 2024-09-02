@@ -132,10 +132,10 @@ proc newMonoLLM*(config: MonoLLMConfig): MonoLLM =
 
 
   if config.openAIKey != "":
-    result.openai = newOpenAIApi(apiKeyParam = config.openAIKey)
+    result.openai = newOpenAiApi(apiKey = config.openAIKey)
   if getEnv("OPENAI_API_KEY").len > 0:
     # openai_leap loads from OPENAI_API_KEY by default
-    result.openai = newOpenAIApi()
+    result.openai = newOpenAiApi()
   
 
   if config.gcpCredentials.isSome:
@@ -215,7 +215,7 @@ proc generateOpenAIChat(llm: MonoLLM, chat: Chat, tools: seq[Tool] = @[], toolFn
     model: chat.model,
     messages: messages,
     tools: toolsOption,
-    toolChoice: option(% "auto")
+    toolChoice: if gptTools.len > 0: option(% "auto") else: none(JsonNode),
   )
 
   req.seed = chat.params.seed
@@ -249,25 +249,28 @@ proc generateOpenAIChat(llm: MonoLLM, chat: Chat, tools: seq[Tool] = @[], toolFn
       ])
     ))
 
-    let toolFunc = toolMsg.tool_calls.get[0].function
-    let toolFn = toolFns[toolFunc.name]
-    let toolFuncArgs = fromJson(toolFunc.arguments)
-    let toolResult = toolFn(toolFuncArgs)
-    messages.add(Message(
-        role: "tool",
-        content: option(
-          @[MessageContentPart(`type`: "text", text: option(
-            toolResult
-          ))]
-          ),
-        tool_call_id: option(toolMsg.tool_calls.get[0].id)
-      ))
+    for toolCallReq in toolMsg.tool_calls.get:
+      # Iterate over the tool call requests and execute the tool functions
+      # TODO: it would be nice to handle these calls in parallel
+      let toolFunc = toolCallReq.function
+      let toolFn = toolFns[toolFunc.name]
+      let toolFuncArgs = fromJson(toolFunc.arguments)
+      let toolResult = toolFn(toolFuncArgs) # execute the provided tool function
+      messages.add(Message(
+          role: "tool",
+          content: option(
+            @[MessageContentPart(`type`: "text", text: option(
+              toolResult
+            ))]
+            ),
+          tool_call_id: option(toolCallReq.id)
+        ))
 
     req = CreateChatCompletionReq(
       model: chat.model,
       messages: messages,
       tools: option(gptTools),
-      toolChoice: option(% "auto")
+      toolChoice: if gptTools.len > 0: option(% "auto") else: none(JsonNode),
     )
 
     resp = llm.openai.createChatCompletion(req)
@@ -429,15 +432,17 @@ proc generateOllamaChat(llm: MonoLLM, chat: Chat, tools: seq[Tool] = @[], toolFn
       content: option(resp.message.content.get)
     ))
 
-    let call = resp.message.tool_calls[0]
-    let toolFunc = call.function
-    let toolFn = toolFns[toolFunc.name]
-    let toolFuncArgs = toolFunc.arguments
-    let toolResult = toolFn(toolFuncArgs)
-    messages.add(llama_leap.ChatMessage(
-      role: $Role.tool,
-      content: option(toolResult)
-    ))
+    for call in resp.message.tool_calls:
+      # Iterate over the tool call requests and execute the tool functions
+      # TODO: it would be nice to handle these calls in parallel
+      let toolFunc = call.function
+      let toolFn = toolFns[toolFunc.name]
+      let toolFuncArgs = toolFunc.arguments
+      let toolResult = toolFn(toolFuncArgs) # execute the provided tool function
+      messages.add(llama_leap.ChatMessage(
+        role: $Role.tool,
+        content: option(toolResult)
+      ))
 
     let req = ChatReq(
       model: chat.model,
