@@ -255,14 +255,26 @@ proc generateOpenAIChat(llm: MonoLLM, chat: Chat, tools: seq[Tool] = @[], toolFn
       let toolFunc = toolCallReq.function
       let toolFn = toolFns[toolFunc.name]
       let toolFuncArgs = fromJson(toolFunc.arguments)
-      let toolResult = toolFn(toolFuncArgs) # execute the provided tool function
-      messages.add(Message(
+      try:
+        let toolResult = toolFn(toolFuncArgs) # execute the provided tool function
+        messages.add(Message(
+            role: "tool",
+            content: option(
+              @[MessageContentPart(`type`: "text", text: option(
+                toolResult
+              ))]
+              ),
+            tool_call_id: option(toolCallReq.id)
+          ))
+      except CatchableError as e:
+        # if the tool function fails, we should return an error message
+        messages.add(Message(
           role: "tool",
           content: option(
             @[MessageContentPart(`type`: "text", text: option(
-              toolResult
+              "Error executing tool function: " & e.msg
             ))]
-            ),
+          ),
           tool_call_id: option(toolCallReq.id)
         ))
 
@@ -438,11 +450,18 @@ proc generateOllamaChat(llm: MonoLLM, chat: Chat, tools: seq[Tool] = @[], toolFn
       let toolFunc = call.function
       let toolFn = toolFns[toolFunc.name]
       let toolFuncArgs = toolFunc.arguments
-      let toolResult = toolFn(toolFuncArgs) # execute the provided tool function
-      messages.add(llama_leap.ChatMessage(
-        role: $Role.tool,
-        content: option(toolResult)
-      ))
+      try:
+        let toolResult = toolFn(toolFuncArgs) # execute the provided tool function
+        messages.add(llama_leap.ChatMessage(
+          role: $Role.tool,
+          content: option(toolResult)
+        ))
+      except CatchableError as e:
+        # if the tool function fails, we should return an error message
+        messages.add(llama_leap.ChatMessage(
+          role: $Role.tool,
+          content: option("Error executing tool function: " & e.msg)
+        ))
 
     let req = ChatReq(
       model: chat.model,
