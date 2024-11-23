@@ -1,4 +1,4 @@
-import std/[strformat], mummy, mummy/routers
+import std/[strformat], mummy, mummy/routers, openai_leap
 
 ## OpenAI Compatible Gateway
 ## 
@@ -10,14 +10,17 @@ import std/[strformat], mummy, mummy/routers
 ## Use 'https://api.openai.com/v1' for official openai endpoint.
 
 type OpenAIGateway* = ref object
-  endpoint*: string   # OpenAI compatible endpoint to forward requests to
-  address*: string    # Address to bind the gateway to
-  port*: uint16       # Port to bind the gateway to
+  endpoint: string     # OpenAI compatible endpoint to forward requests to
+  address: string      # Address to bind the gateway to
+  port: uint16         # Port to bind the gateway to
+
+  openAI*: OpenAiApi
 
 # TODO custom agents
 
 proc createOpenAIGateway*(
   endpoint: string,
+  bearerToken: string = "", # will be empty for local ollama endpoint
   address: string = "localhost",
   port: uint16 = 8085
 ): OpenAIGateway =
@@ -25,6 +28,10 @@ proc createOpenAIGateway*(
     endpoint: endpoint,
     address: address,
     port: port
+  )
+  result.openAI = newOpenAiApi(
+    endpoint,
+    apiKey = bearerToken
   )
 
 proc healthHandler(request: Request) =
