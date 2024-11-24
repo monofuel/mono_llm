@@ -1,5 +1,5 @@
-import std/[strformat, parseopt, envvars, strutils],
-  curly, mummy, mummy/routers, openai_leap
+import std/[strformat, json, parseopt, envvars, strutils],
+  curly, jsony, mummy, mummy/routers, openai_leap
 
 ## OpenAI Compatible Gateway
 ## 
@@ -47,12 +47,17 @@ proc logRequest(gateway: OpenAIGateway, req: Request, resp: Response) =
     return
   var logBlock = &"""
 # Req {req.httpMethod} {req.path}
+{req.headers}
+---
 {req.body}
 # Resp {resp.code}
+{resp.headers}
+---
 {resp.body}
 """
-  writeFile(gateway.logFile, logBlock)
-
+  let file = open(gateway.logFile, fmAppend)
+  file.write(logBlock)
+  file.close()
 
 proc healthHandler(request: Request) =
   var headers: HttpHeaders
@@ -64,23 +69,79 @@ proc startOpenAIGateway*(gateway: OpenAIGateway) =
   var router: Router
   let openAI = gateway.openAI
 
-  proc modelHandler(request: Request) =
-    ## proxy GET /models
-    echo "GET /models"
+  # API handlers
+  proc notFoundHandler(request: Request) =
+    # if route not found, assume it's a valid request and forward to OpenAI
+    echo &"UNHANDLED PROXY REQUEST: {request.httpMethod} {request.path}"
     var headers: Httpheaders
     if request.headers["Authorization"] == "":
       request.respond(401, headers, "Unauthorized")
 
-    var apiKey = request.headers["Authorization"]
-    apiKey.removePrefix("Bearer ")
+    var bearerToken = request.headers["Authorization"]
+    bearerToken.removePrefix("Bearer ")
     let organization = request.headers["Organization"]
-    let resp = openAI.get("/models", apiKey, organization)
+
+    # TODO why do I have to do this? is mummy not handling gzip correctly or is open-webui not handling it correctly?
+    request.headers["Accept-Encoding"] = ""
+
+    if request.httpMethod == "GET":
+      let resp = openAI.get(request.path, Opts(bearerToken: bearerToken, organization: organization))
+      request.respond(resp.code, resp.headers, resp.body)
+      echo &"UNHANDLED PROXY RESPONSE: {request.httpMethod} {request.path} {resp.code}"
+      gateway.logRequest(request, resp)
+    elif request.httpMethod == "POST":
+      let resp = openAI.post(request.path, request.body, Opts(bearerToken: bearerToken, organization: organization))
+      request.respond(resp.code, resp.headers, resp.body)
+      echo &"UNHANDLED PROXY RESPONSE: {request.httpMethod} {request.path} {resp.code}"
+      gateway.logRequest(request, resp)
+    else:
+      request.respond(404, headers, "Method Not found")
+
+  proc modelHandler(request: Request) =
+    ## proxy GET /models
+    echo &"{request.httpMethod} {request.path}"
+    var headers: Httpheaders
+    if request.headers["Authorization"] == "":
+      request.respond(401, headers, "Unauthorized")
+
+    var bearerToken = request.headers["Authorization"]
+    bearerToken.removePrefix("Bearer ")
+    let organization = request.headers["Organization"]
+    let resp = openAI.get("/models", Opts(bearerToken: bearerToken, organization: organization))
+
+    request.headers["Accept-Encoding"] = ""
     request.respond(resp.code, resp.headers, resp.body)
     gateway.logRequest(request, resp)
 
+  proc chatHandler(request: Request) =
+    ## proxy POST /chat/completions
+    echo &"{request.httpMethod} {request.path}"
+    var headers: HttpHeaders
+    if request.headers["Authorization"] == "":
+      request.respond(401, headers, "Unauthorized")
 
+    var bearerToken = request.headers["Authorization"]
+    bearerToken.removePrefix("Bearer ")
+    let organization = request.headers["Organization"]
+
+    request.headers["Accept-Encoding"] = ""
+
+    # TODO streaming
+    let reqJson = fromJson(request.body)
+    if reqJson.hasKey("stream") and reqJson["stream"].getBool:
+      request.respond(501, headers, "Streaming not supported")
+      return
+
+    let resp = openAI.post("/chat/completions", request.body, Opts(bearerToken: bearerToken, organization: organization))
+    request.respond(resp.code, resp.headers, resp.body)
+    gateway.logRequest(request, resp)
+
+  # setup routes
   router.get("/_health", healthHandler)
   router.get("/models", modelHandler)
+  router.post("/chat/completions", chatHandler)
+  router.notFoundHandler = notFoundHandler
+  
   echo &"Serving on http://{gateway.address}:{gateway.port}"
   let server = newServer(router)
   server.serve(Port(gateway.port), gateway.address)
