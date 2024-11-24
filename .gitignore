@@ -11,4 +11,8 @@ nimcache
 *.out
 .*
 
+# vertexAI keys
 tests/service_account.json
+
+# test log output
+test.txt

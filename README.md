@@ -5,13 +5,13 @@
 
 - LLM gateway project
 - MonoLLM is an OpenAPI gateway for the OpenAI API
-- you can directly execute `nim c -r src/gateway.nim` to get a simple openai proxy.
+- you can directly execute `nim c -r src/gateway.nim --address=0.0.0.0` to get a simple openai proxy.
 
 - you can also import the gateway package and extend it to create your own gateway with additional features
 ```nim
 import mono_llm/gateway
 
-let gateway = createOpenAIGateway("https://api.openai.com/v1")
+let gateway = createOpenAIGateway("https://api.openai.com/v1", "0.0.0.0",8085)
 startOpenAIGateway(gateway)
 ```
 
@@ -25,6 +25,7 @@ startOpenAIGateway(gateway)
 
 ## Features
 
+- [ ] models
 - [ ] chat
 - [ ] completions
 - [ ] embeddings
