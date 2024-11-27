@@ -235,16 +235,16 @@ proc generateOpenAIChat(llm: MonoLLM, chat: Chat, tools: seq[Tool] = @[], toolFn
   var resultMessage = ""
 
   
-  while resp.choices[0].message.tool_calls.isSome and resp.choices[0].message.tool_calls.get.len > 0:
-    resultMessage.add(resp.choices[0].message.content)
-    let toolMsg = resp.choices[0].message
+  while resp.choices[0].message.get.tool_calls.isSome and resp.choices[0].message.get.tool_calls.get.len > 0:
+    resultMessage.add(resp.choices[0].message.get.content)
+    let toolMsg = resp.choices[0].message.get
     messages.add(openai_leap.Message(
       role: $Role.assistant,
       tool_calls: toolMsg.tool_calls,
       content: option(@[
         MessageContentPart(
           `type`: "text",
-          text: option(resp.choices[0].message.content)
+          text: option(resp.choices[0].message.get.content)
         )
       ])
     ))
@@ -287,7 +287,7 @@ proc generateOpenAIChat(llm: MonoLLM, chat: Chat, tools: seq[Tool] = @[], toolFn
 
     resp = llm.openai.createChatCompletion(req)
 
-  resultMessage.add(resp.choices[0].message.content)
+  resultMessage.add(resp.choices[0].message.get.content)
 
   # TODO token counting needs to be improved for tool calls
   result = ChatResp(
