@@ -14,32 +14,32 @@ import std/[strformat, tables, json, parseopt, envvars, strutils],
 
 type
   ToolImpl* = proc (args: JsonNode): string
+  PreHook* = proc (req: JsonNode) {.gcsafe.}
+  PostHook* = proc (req: JsonNode, resp: JsonNode) {.gcsafe.}
   Agent* = ref object of RootObj
     name*: string
-    systemPrompt*: string                                 # default system prompt if not set in request
-    overrideSystemPrompt*: bool                           # whether to override the system prompt if set in request
-    appendSystemPrompt*: bool                             # whether to append the system prompt if set in request
-    tools: seq[openai_leap.ToolFunction]                          # Tool name to Tool API spec
-    toolFns: Table[string, ToolImpl]                      # Tool name to actual procedure
-    preAgentHook*: proc (chat: CreateChatCompletionReq)   # Any logic to append a RAG to the system prompt can happen here
-    postAgentHook*: proc (chat: CreateChatCompletionReq, resp: CreateChatCompletionResp)  # any follow up logic like saving memories
+    systemPrompt*: string                 # default system prompt if not set in request
+    overrideSystemPrompt*: bool           # whether to override the system prompt if set in request
+    appendSystemPrompt*: bool             # whether to append the system prompt if set in request
+    tools: seq[openai_leap.ToolFunction]  # Tool name to Tool API spec
+    toolFns: Table[string, ToolImpl]      # Tool name to actual procedure
+    preAgentHook*: PreHook                # Any logic to append a RAG to the system prompt can happen here
+    postAgentHook*: PostHook              # any follow up logic like saving memories
   OpenAIGateway* = ref object
     openAI*: OpenAiApi
     agents*: Table[string, Agent]
-    endpoint: string     # OpenAI compatible endpoint to forward requests to
-    address: string      # Address to bind the gateway to
-    port: uint16         # Port to bind the gateway to
+    endpoint: string                      # OpenAI compatible endpoint to forward requests to
+    address: string                       # Address to bind the gateway to
+    port: uint16                          # Port to bind the gateway to
     logFile: string
   ApiGatewayError* = object of CatchableError
 
 proc addAgent*(gw: OpenAIGateway, agent: Agent) = 
   gw.agents[agent.name] = agent
 
-
 proc addTool*(agent: Agent, tool: openai_leap.ToolFunction, fn: ToolImpl) =
   agent.tools.add(tool)
   agent.toolFns[tool.name] = fn
-
 
 proc createOpenAIGateway*(
   endpoint: string,
@@ -175,8 +175,16 @@ proc startOpenAIGateway*(gateway: OpenAIGateway) =
             firstMessage["content"] = %agent.systemPrompt
           elif agent.appendSystemPrompt:
             # append the system prompt
-            # TODO test if this is a message content part
-            firstMessage["content"] &= %agent.systemPrompt
+            if firstMessage["content"].kind == JString:
+              # if content is a string, simply append the system prompt
+              firstMessage["content"] &= %agent.systemPrompt
+            else:
+              # otherwise it will be an array of content parts text, image or audio
+              if firstMessage["content"].kind != JArray:
+                raise newException(ApiGatewayError, "Unsupported message content")
+              # TODO I wonder if it's possible to include images or audio in the system prompt?
+              let contentPart = firstMessage["content"][0]
+              contentPart["text"] = %(contentPart["text"].str & agent.systemPrompt)
         else:
           # insert our special system prompt as the first message
           let promptMsg = %*{
@@ -187,6 +195,7 @@ proc startOpenAIGateway*(gateway: OpenAIGateway) =
           messages.insert(promptMsg,0)
           reqJson["messages"] = %messages
 
+      agent.preAgentHook(reqJson)
 
     if reqJson.hasKey("stream") and reqJson["stream"].getBool:
       raise newException(ApiGatewayError, "Streaming not supported")
@@ -204,6 +213,7 @@ proc startOpenAIGateway*(gateway: OpenAIGateway) =
       let resp = openAI.post("/chat/completions", request.body, Opts(bearerToken: bearerToken, organization: organization))
       request.respond(resp.code, resp.headers, resp.body)
       gateway.logRequest(request, resp)
+      agent.postAgentHook(reqJson, fromJson(resp.body))
 
   # setup routes
   router.get("/_health", healthHandler)
