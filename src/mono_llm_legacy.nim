@@ -27,7 +27,7 @@ type
     top_p*: Option[float32] = option(0.9f)
     top_k*: Option[int] = option(40)
     json*: Option[bool] = option(false) # request json response (remember to also prompt for json)
-  Tool* = ref object
+  ToolCall* = ref object
     name*: string
     arguments*: string # JSON string of arguments
   ChatMessage* = ref object
@@ -36,7 +36,7 @@ type
     content*: Option[string]           # either content, image, or imageUrl must be set
     images*: Option[seq[string]]       # sequence of base64 encoded images
     imageUrls*: Option[seq[string]]    # sequence of urls to images
-    Tools*: Option[seq[Tool]]  # Tools the LLM is calling
+    Tools*: Option[seq[ToolCall]]  # Tools the LLM is calling
   ChatExample* = ref object
     input*: ChatMessage
     output*: ChatMessage
@@ -194,9 +194,9 @@ proc generateOpenAIChat(llm: MonoLLM, chat: Chat, tools: seq[Tool] = @[], toolFn
       content: option(contentParts)
     ))
 
-  var gptTools: seq[openai_leap.ToolCall]
+  var gptTools: seq[openai_leap.Tool]
   for tool in tools:
-    gptTools.add(openai_leap.ToolCall(
+    gptTools.add(openai_leap.Tool(
       `type`: "function",
       function: openai_leap.ToolFunction(
         name: tool.name,
@@ -211,7 +211,7 @@ proc generateOpenAIChat(llm: MonoLLM, chat: Chat, tools: seq[Tool] = @[], toolFn
     ))
 
 
-  var toolsOption = none(seq[openai_leap.ToolCall])
+  var toolsOption = none(seq[openai_leap.Tool])
   if gptTools.len > 0:
     toolsOption = option(gptTools)
   var req = CreateChatCompletionReq(
