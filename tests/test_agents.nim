@@ -52,6 +52,7 @@ proc newTestAgent*(): TestAgent =
     name: "get_flight_times",
     description: option("Get the flight times between two cities. This function may be called multiple times in parallel to get multiple flight times."),
     parameters: option(%*{
+      "type": "object",
       "required": @["departure", "arrival"],
       "properties": {
         "departure": {

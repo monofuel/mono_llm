@@ -199,8 +199,17 @@ proc start*(gateway: OpenAIGateway) =
           messages.insert(promptMsg,0)
           reqJson["messages"] = %messages
 
-      # TODO inject tool calling
-
+      # inject tool calling
+      var tools: seq[JsonNode]
+      if  reqJson.hasKey("tools"):
+        tools = reqJson["tools"].getElems
+      for tool in agent.tools:
+        tools.add(%*{
+          "type": "function",
+          "function": %tool,
+        })
+      if tools.len > 0:
+        reqJson["tools"] = %tools
 
       if agent.preAgentHook != nil:
         agent.preAgentHook(reqJson)
@@ -218,6 +227,8 @@ proc start*(gateway: OpenAIGateway) =
 
     # not streaming
     let resp = openAI.post("/chat/completions", toJson(reqJson), Opts(bearerToken: bearerToken, organization: organization))
+
+    echo resp.body
 
     # TODO handle tool calls we injected
     # may need to make multiple requests to the API.
