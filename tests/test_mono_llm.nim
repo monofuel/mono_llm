@@ -54,49 +54,53 @@ suite "mono_llm":
     let resp = openai.createChatCompletion(req)
     echo resp.choices[0].message.get.content
 
-  # test "image+chat tests":
-  #     let chat = Chat(
-  #       model: model,
-  #       messages: @[
-  #         ChatMessage(role: Role.system, content: option("You are longbeard the llama. Please respond as a pirate.")),
-  #         ChatMessage(role: Role.user, content: option("how do you like this image?"), images: option(@[imageBase64]))
-  #       ],
-  #     )
-  #     let resp = monoLLM.generateChat(chat)
-  #     echo resp.message
+  test "image+chat tests":
+    let req = CreateChatCompletionReq(
+        model: TestModel,
+        messages: @[
+          Message(
+            role: "system",
+            content:
+              option(@[MessageContentPart(`type`: "text", text: option(
+              "You are longbeard the llama. Please respond as a pirate."
+              ))])
+          ),
+          Message(
+            role: "user",
+            content:
+              option(@[
+                MessageContentPart(`type`: "text", text: option(
+                  "how do you like this image?"
+                )),
+                MessageContentPart(`type`: "image_url", image_url: option(ImageUrlPart(url: TestImageUrl)))
+              ]),
+          )
+        ],
+      )
 
-  # test "image_url+chat tests":
-  #   let chat = Chat(
-  #     model: model,
-  #     messages: @[
-  #       ChatMessage(role: Role.system, content: option("You are longbeard the llama. Please respond as a pirate.")),
-  #       ChatMessage(role: Role.user, content: option("how do you like this image?"), imageUrls: option(@[TestImageUrl]))
-  #     ],
-  #   )
-  #   let resp = monoLLM.generateChat(chat)
-  #   echo resp.message
+    let resp = openai.createChatCompletion(req)
+    echo resp.choices[0].message.get.content
 
-  # test "image only tests":
-  #   # openAI does not support base64 images via api
-  #   let chat = Chat(
-  #     model: model,
-  #     provider: TestProviders[i],
-  #     messages: @[
-  #       ChatMessage(role: Role.system, content: option("You are longbeard the llama. Please respond as a pirate.")),
-  #       ChatMessage(role: Role.user, images: option(@[imageBase64]))
-  #     ],
-  #   )
-  #   let resp = monoLLM.generateChat(chat)
-  #   echo resp.message
+  test "image_url only tests":
+    let req = CreateChatCompletionReq(
+        model: TestModel,
+        messages: @[
+          Message(
+            role: "system",
+            content:
+              option(@[MessageContentPart(`type`: "text", text: option(
+              "You are longbeard the llama. Please respond as a pirate."
+              ))])
+          ),
+          Message(
+            role: "user",
+            content:
+              option(@[
+                MessageContentPart(`type`: "image_url", image_url: option(ImageUrlPart(url: TestImageUrl)))
+              ]),
+          )
+        ],
+      )
 
-  # test "image_url only tests":
-
-  #   let chat = Chat(
-  #     model: model,
-  #     messages: @[
-  #       ChatMessage(role: Role.system, content: option("You are longbeard the llama. Please respond as a pirate.")),
-  #       ChatMessage(role: Role.user, imageUrls: option(@[TestImageUrl]))
-  #     ],
-  #   )
-  #   let resp = monoLLM.generateChat(chat)
-  #   echo resp.message
+    let resp = openai.createChatCompletion(req)
+    echo resp.choices[0].message.get.content
