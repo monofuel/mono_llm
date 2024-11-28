@@ -183,7 +183,9 @@ proc startOpenAIGateway*(gateway: OpenAIGateway) =
             "role": "system",
             "content": agent.systemPrompt
           }
-          reqJson["messages"].insert(0, promptMsg)
+          var messages = reqJson["messages"].getElems
+          messages.insert(promptMsg,0)
+          reqJson["messages"] = %messages
 
 
     if reqJson.hasKey("stream") and reqJson["stream"].getBool:
