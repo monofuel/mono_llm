@@ -1,0 +1,11 @@
+nimTitle	mono_llm	mono_llm.html	module src/mono_llm		0
+nim	ToolImpl	mono_llm.html#ToolImpl	type ToolImpl		18
+nim	PreHook	mono_llm.html#PreHook	type PreHook		19
+nim	PostHook	mono_llm.html#PostHook	type PostHook		20
+nim	Agent	mono_llm.html#Agent	type Agent		21
+nim	OpenAIGateway	mono_llm.html#OpenAIGateway	type OpenAIGateway		30
+nim	ApiGatewayError	mono_llm.html#ApiGatewayError	object ApiGatewayError		37
+nim	addAgent	mono_llm.html#addAgent,OpenAIGateway,Agent	proc addAgent(gw: OpenAIGateway; agent: Agent)		39
+nim	addTool	mono_llm.html#addTool,Agent,,ToolImpl	proc addTool(agent: Agent; tool: openai_leap.ToolFunction; fn: ToolImpl)		42
+nim	newOpenAIGateway	mono_llm.html#newOpenAIGateway,string,string,uint16,string	proc newOpenAIGateway(endpoint: string; address: string = "localhost";\n                 port: uint16 = 8085; logFile = ""): OpenAIGateway		46
+nim	start	mono_llm.html#start,OpenAIGateway	proc start(gateway: OpenAIGateway)		86
