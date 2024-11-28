@@ -11,7 +11,7 @@
 ```nim
 import mono_llm
 
-let gateway = createOpenAIGateway("https://api.openai.com/v1", "0.0.0.0",8085)
+let gateway = newOpenAIGateway("https://api.openai.com/v1", "0.0.0.0",8085)
 startOpenAIGateway(gateway)
 ```
 
@@ -29,8 +29,14 @@ startOpenAIGateway(gateway)
 - [ ] streaming
 
 - [x] defining agents
-- [ ] test pre-hook
+- [x] test pre-hook
   - context adding
   - chat history injection
-- [ ] adding tool calls
-- [ ] test post-hook
+- [x] adding tool calls
+- [x] test post-hook
+
+- [ ] handle tools from the client
+  - the gateway should be smart and bubble up tool calls to the client if it doesn't know how to handle them
+  - what to do when the AI asks for multiple gateway tools and multiple client tools? probably just return the one client tool, and let the client call back again. but then the gateway won't have the previous tool calls, hmm...
+- [ ] RAG examples
+  - could build some ready-to-go rag functions as part of the agent pre-hook
