@@ -144,6 +144,47 @@ proc startOpenAIGateway*(gateway: OpenAIGateway) =
     request.headers["Accept-Encoding"] = ""
 
     let reqJson = fromJson(request.body)
+
+    # insert our agent logic
+    if not reqJson.hasKey("model"):
+      raise newException(ApiGatewayError, "Model not specified")
+    var agentName = ""
+    var modelName = ""
+    let fullModelName = reqJson["model"].str
+    if fullModelName.contains("/"):
+      agentName = fullModelName.split("/")[0]
+      modelName = fullModelName.split("/")[1]
+    else:
+      modelname = fullModelName
+
+    var agent: Agent
+    if agentName != "":
+      agent = gateway.agents[agentName]
+
+      if agent.systemPrompt != "":
+        # find the system prompt first message
+        var systemPrompt: openai_leap.Message
+        if not reqJson.hasKey("messages") or reqJson["messages"].len == 0:
+          raise newException(ApiGatewayError, "Messages not specified")
+        
+        # check if the first message is the system prompt
+        let firstMessage = reqJson["messages"][0]
+        if firstMessage["role"].str == "system":
+          if agent.overrideSystemPrompt:
+            # override the system prompt
+            firstMessage["content"] = agent.systemPrompt
+          elif agent.appendSystemPrompt:
+            # append the system prompt
+            # TODO test if this is a message content part
+            firstMessage["content"] &= agent.systemPrompt
+        else:
+          # insert our special system prompt as the first message
+          let promptMsg = %{
+            "role": "system",
+            "content": agent.systemPrompt
+          }
+
+
     if reqJson.hasKey("stream") and reqJson["stream"].getBool:
       raise newException(ApiGatewayError, "Streaming not supported")
       # streaming
