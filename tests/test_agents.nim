@@ -1,15 +1,19 @@
 import
-  std/[unittest, json, tables, strutils, options, os, base64],
-  mono_llm, jsony, vertex_leap
+  std/[unittest, strformat, json, tables, strutils, options, os, base64],
+  mono_llm, jsony, openai_leap
 
 const
-  TestModels = ["llama3.1:8b", "gpt-4o-mini", "gemini-1.5-flash"]
-  TestProviders = [ChatProvider.ollama, ChatProvider.openai, ChatProvider.vertexai]
+  TestAgentName = "test-agent"
+  TestModel = "gpt-4o-mini"
+  TestAddress = "localhost"
+  TestPort = 8086.uint16
 
 var
   preHookCount = 0
   postHookCount = 0
   functionCallCount = 0
+  serverThread: Thread[void]
+  gateway: OpenAIGateway
 
 proc getFlightTimes(args: JsonNode): string =
   ## Our test function to get flight times.
@@ -41,15 +45,15 @@ type
 
 proc newTestAgent*(): TestAgent =
   result = TestAgent()
-  result.name = "test-agent"
+  result.name = TestAgentName
   result.systemPrompt = "You are longbeard the llama. Please respond as a pirate. You are also a loyal and trustworthy assistant to the user."
 
-  let tool = Tool(
+  let tool = ToolFunction(
     name: "get_flight_times",
-    description: "Get the flight times between two cities. This function may be called multiple times in parallel to get multiple flight times.",
-    parameters: ToolFunctionParameters(
-      required: @["departure", "arrival"],
-      properties: %* {
+    description: option("Get the flight times between two cities. This function may be called multiple times in parallel to get multiple flight times."),
+    parameters: option(%*{
+      "required": @["departure", "arrival"],
+      "properties": {
         "departure": {
           "type": "string",
           "description": "The departure city (airport code)"
@@ -59,80 +63,78 @@ proc newTestAgent*(): TestAgent =
           "description": "The arrival city (airport code)"
         }
       }
-    )
+    })
   )
   result.addTool(tool, getFlightTimes)
   
-  proc preAgentHook(chat: Chat) =
+  proc preAgentHook(req: JsonNode) =
     preHookCount += 1
   result.preAgentHook = preAgentHook
 
-  proc postAgentHook(chat: Chat) =
+  proc postAgentHook(req: JsonNode, resp: JsonNode) =
     postHookCount += 1
   result.postAgentHook = postAgentHook
 
 suite "llm agents":
-  var monoLLM: MonoLLM
+  var openAI: OpenAiApi
   setup:
-    var config = MonoLLMConfig(
-      ollamaBaseUrl: "http://localhost:11434/api",
+    openAI = newOpenAiApi(&"http://{TestAddress}:{TestPort}")
+
+    gateway = newOpenAIGateway(
+      "https://api.openai.com/v1",
+      TestAddress,
+      TestPort,
     )
 
-    let credentialPath = os.getEnv("GOOGLE_APPLICATION_CREDENTIALS", "")
-    if credentialPath == "":
-      let credStr = readFile("tests/service_account.json")
-      config.gcpCredentials = option(fromJson(credStr, GCPCredentials))
+    gateway.addAgent(newTestAgent())
 
-    monoLLM = newMonoLLM(config)
-    assert monoLLM.ollama != nil
-    assert monoLLM.openai != nil
-    assert monoLLM.vertexai != nil
+    proc startGateway() {.thread.} =
+      {.gcsafe.}:
+        gateway.start()
 
-    monoLLM.addAgent(newTestAgent())
+    createThread(serverThread, startGateway)
+    # HACK wait for the server to start
+    sleep(1000)
 
   test "single tool":
-    for i, model in TestModels:
-      if i == 2:
-        # need to implement tool handling for gemini
-        continue
-      echo model
-      preHookCount = 0
-      postHookCount = 0
-      functionCallCount = 0
-      let chat = Chat(
-        model: model,
-        agent: "test-agent",
-        provider: TestProviders[i],
-        messages: @[
-          ChatMessage(role: Role.user, content: option("What is the flight time from New York (NYC) to Los Angeles (LAX)?"))
-        ],
-      )
-      let resp = monoLLM.generateChat(chat)
-      echo resp.message
-      assert preHookCount == 1
-      assert postHookCount == 1
-      assert functionCallCount == 1
+    echo TestModel
+    preHookCount = 0
+    postHookCount = 0
+    functionCallCount = 0
+    let chat = CreateChatCompletionReq(
+      model: TestAgentName & "/" & TestModel,
+      messages: @[
+        Message(
+          role: "user", content: option(@[MessageContentPart(
+            `type`: "text",
+            text: option("What is the flight time from New York (NYC) to Los Angeles (LAX)?")
+          )])
+        )
+      ],
+    )
+    let resp = openAI.createChatCompletion(chat)
+    echo resp.choices[0].message.get.content
+    assert preHookCount == 1
+    assert postHookCount == 1
+    assert functionCallCount == 1
 
   test "multi tool":
-    for i, model in TestModels:
-      if i == 2:
-        # need to implement tool handling for gemini
-        continue
-      echo model
-      preHookCount = 0
-      postHookCount = 0
-      functionCallCount = 0
-      let chat = Chat(
-        model: model,
-        agent: "test-agent",
-        provider: TestProviders[i],
-        messages: @[
-          ChatMessage(role: Role.user, content: option("What is the flight time from New York (NYC) to Los Angeles (LAX), and then connecting Los Angeles (LAX) to Chicago (ORD)?"))
-        ],
-      )
-      let resp = monoLLM.generateChat(chat)
-      chat.prettyPrint
-      echo resp.message
-      assert preHookCount == 1
-      assert postHookCount == 1
-      assert functionCallCount == 2
+    preHookCount = 0
+    postHookCount = 0
+    functionCallCount = 0
+    let chat = CreateChatCompletionReq(
+      model: TestAgentName & "/" & TestModel,
+      messages: @[
+        Message(
+          role: "user", content: option(@[MessageContentPart(
+            `type`: "text",
+            text: option("What is the flight time from New York (NYC) to Los Angeles (LAX), and then connecting Los Angeles (LAX) to Chicago (ORD)?")
+          )])
+        )
+      ],
+    )
+    let resp = openAI.createChatCompletion(chat)
+    echo resp.choices[0].message.get.content
+    assert preHookCount == 1
+    assert postHookCount == 1
+    assert functionCallCount == 2

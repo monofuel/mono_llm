@@ -12,6 +12,8 @@ import std/[strformat, tables, json, parseopt, envvars, strutils],
 ## 
 ## This gateway does not handle authorization. clients must provide a bearer token in the Authorization header.
 
+export openai_leap.ToolFunction
+
 type
   ToolImpl* = proc (args: JsonNode): string
   PreHook* = proc (req: JsonNode) {.gcsafe.}
@@ -41,7 +43,7 @@ proc addTool*(agent: Agent, tool: openai_leap.ToolFunction, fn: ToolImpl) =
   agent.tools.add(tool)
   agent.toolFns[tool.name] = fn
 
-proc createOpenAIGateway*(
+proc newOpenAIGateway*(
   endpoint: string,
   address: string = "localhost",
   port: uint16 = 8085,
@@ -81,7 +83,7 @@ proc healthHandler(request: Request) =
   headers["Content-Type"] = "text/plain"
   request.respond(200, headers, "OK")
 
-proc startOpenAIGateway*(gateway: OpenAIGateway) =
+proc start*(gateway: OpenAIGateway) =
   echo "Starting OpenAI Gateway"
   var router: Router
   let openAI = gateway.openAI
@@ -157,6 +159,8 @@ proc startOpenAIGateway*(gateway: OpenAIGateway) =
     else:
       modelname = fullModelName
 
+    reqJson["model"] = %modelName
+
     var agent: Agent
     if agentName != "":
       agent = gateway.agents[agentName]
@@ -198,28 +202,29 @@ proc startOpenAIGateway*(gateway: OpenAIGateway) =
       # TODO inject tool calling
 
 
-      agent.preAgentHook(reqJson)
+      if agent.preAgentHook != nil:
+        agent.preAgentHook(reqJson)
 
-    if reqJson.hasKey("stream") and reqJson["stream"].getBool:
-      raise newException(ApiGatewayError, "Streaming not supported")
-      # streaming
-      # TODO figure this out
-      # let stream = openAI.postStream(api, "/chat/completions", reqBody, Opts(bearerToken: bearerToken, organization: organization))
-      # send the headers
-      # openai headers will include:
-      # Content-Type: text/event-stream; charset=utf-8
-      # Transfer-Encoding: chunked
-      # request.respond(resp.code, resp.headers)
+    # streaming
+    # TODO figure this out
+    #if reqJson.hasKey("stream") and reqJson["stream"].getBool:
+    # let stream = openAI.postStream(api, "/chat/completions", reqBody, Opts(bearerToken: bearerToken, organization: organization))
+    # send the headers
+    # openai headers will include:
+    # Content-Type: text/event-stream; charset=utf-8
+    # Transfer-Encoding: chunked
+    # request.respond(resp.code, resp.headers)
+    #else:
 
-    else:
-      # not streaming
-      let resp = openAI.post("/chat/completions", request.body, Opts(bearerToken: bearerToken, organization: organization))
+    # not streaming
+    let resp = openAI.post("/chat/completions", toJson(reqJson), Opts(bearerToken: bearerToken, organization: organization))
 
-      # TODO handle tool calls we injected
-      # may need to make multiple requests to the API.
+    # TODO handle tool calls we injected
+    # may need to make multiple requests to the API.
 
-      request.respond(resp.code, resp.headers, resp.body)
-      gateway.logRequest(request, resp)
+    request.respond(resp.code, resp.headers, resp.body)
+    gateway.logRequest(request, resp)
+    if agent != nil and agent.postAgentHook != nil:
       agent.postAgentHook(reqJson, fromJson(resp.body))
 
   # setup routes
@@ -257,10 +262,10 @@ when isMainModule:
       discard
 
   echo address
-  let gateway = createOpenAIGateway(
+  let gateway = newOpenAIGateway(
     endpoint,
     address,
     port,
     logFile
     )
-  startOpenAIGateway(gateway)
+  start(gateway)
