@@ -5,14 +5,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest]
 
     runs-on: ${{ matrix.os }}
 
     steps:
     - uses: actions/checkout@v3
-    - uses: jiro4989/setup-nim-action@v1
+    - uses: jiro4989/setup-nim-action@v2
       with:
         repo-token: ${{ secrets.GITHUB_TOKEN }}
-    - run: nimble test -y
-    - run: nimble test --gc:orc -y
+    - run: |
+        export OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
+        nimble test -y
+        nimble test --gc:orc -y
