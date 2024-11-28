@@ -18,3 +18,4 @@ jobs:
         export OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
         nimble test -y
         nimble test --gc:orc -y
+        nim c examples/proxy.nim
