@@ -194,9 +194,9 @@ proc generateOpenAIChat(llm: MonoLLM, chat: Chat, tools: seq[Tool] = @[], toolFn
       content: option(contentParts)
     ))
 
-  var gptTools: seq[openai_leap.Tool]
+  var gptTools: seq[openai_leap.ToolCall]
   for tool in tools:
-    gptTools.add(openai_leap.Tool(
+    gptTools.add(openai_leap.ToolCall(
       `type`: "function",
       function: openai_leap.ToolFunction(
         name: tool.name,
@@ -211,7 +211,7 @@ proc generateOpenAIChat(llm: MonoLLM, chat: Chat, tools: seq[Tool] = @[], toolFn
     ))
 
 
-  var toolsOption = none(seq[openai_leap.Tool])
+  var toolsOption = none(seq[openai_leap.ToolCall])
   if gptTools.len > 0:
     toolsOption = option(gptTools)
   var req = CreateChatCompletionReq(
@@ -238,24 +238,24 @@ proc generateOpenAIChat(llm: MonoLLM, chat: Chat, tools: seq[Tool] = @[], toolFn
   var resultMessage = ""
 
   
-  while resp.choices[0].message.tool_calls.isSome and resp.choices[0].message.tool_calls.get.len > 0:
-    resultMessage.add(resp.choices[0].message.content)
-    let toolMsg = resp.choices[0].message
+  while resp.choices[0].message.get.tool_calls.isSome and resp.choices[0].message.get.tool_calls.get.len > 0:
+    resultMessage.add(resp.choices[0].message.get.content)
+    let toolMsg = resp.choices[0].message.get
     messages.add(openai_leap.Message(
       role: $Role.assistant,
       tool_calls: toolMsg.tool_calls,
       content: option(@[
         MessageContentPart(
           `type`: "text",
-          text: option(resp.choices[0].message.content)
+          text: option(resp.choices[0].message.get.content)
         )
       ])
     ))
 
-    for ToolReq in toolMsg.tool_calls.get:
+    for toolCallReq in toolMsg.tool_calls.get:
       # Iterate over the tool call requests and execute the tool functions
       # TODO: it would be nice to handle these calls in parallel
-      let toolFunc = ToolReq.function
+      let toolFunc = toolCallReq.function
       let toolFn = toolFns[toolFunc.name]
       let toolFuncArgs = fromJson(toolFunc.arguments)
       try:
@@ -267,7 +267,7 @@ proc generateOpenAIChat(llm: MonoLLM, chat: Chat, tools: seq[Tool] = @[], toolFn
                 toolResult
               ))]
               ),
-            tool_call_id: option(ToolReq.id)
+            tool_call_id: option(toolCallReq.id)
           ))
       except CatchableError as e:
         # if the tool function fails, we should return an error message
@@ -278,7 +278,7 @@ proc generateOpenAIChat(llm: MonoLLM, chat: Chat, tools: seq[Tool] = @[], toolFn
               "Error executing tool function: " & e.msg
             ))]
           ),
-          tool_call_id: option(ToolReq.id)
+          tool_call_id: option(toolCallReq.id)
         ))
 
     req = CreateChatCompletionReq(
@@ -290,7 +290,7 @@ proc generateOpenAIChat(llm: MonoLLM, chat: Chat, tools: seq[Tool] = @[], toolFn
 
     resp = llm.openai.createChatCompletion(req)
 
-  resultMessage.add(resp.choices[0].message.content)
+  resultMessage.add(resp.choices[0].message.get.content)
 
   # TODO token counting needs to be improved for tool calls
   result = ChatResp(
@@ -299,7 +299,6 @@ proc generateOpenAIChat(llm: MonoLLM, chat: Chat, tools: seq[Tool] = @[], toolFn
     outputTokens: resp.usage.total_tokens - resp.usage.prompt_tokens,
     totalTokens: resp.usage.total_tokens,
   )
-
 
 proc generateVertexAIChat(llm: MonoLLM, chat: Chat, tools: seq[Tool] = @[], toolFns: Table[string, ToolImpl]): ChatResp =
   # primarily focused on gemini pro

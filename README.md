@@ -5,7 +5,7 @@
 
 - LLM gateway project
 - MonoLLM is an OpenAPI gateway for the OpenAI API
-- you can directly execute `nim c -r src/gateway.nim --address=0.0.0.0` to get a simple openai proxy.
+- you can directly execute `nim c -r src/mono_llm.nim --address=0.0.0.0 --logFile=test.txt` to get a simple openai proxy.
 
 - you can also import the gateway package and extend it to create your own gateway with additional features
 ```nim
@@ -25,16 +25,12 @@ startOpenAIGateway(gateway)
 
 ## Features
 
-- [ ] models
-- [ ] chat
-- [ ] completions
-- [ ] embeddings
+- [x] get/post
+- [ ] streaming
 
-- [ ] defining agents
-- [ ] adding context
+- [x] defining agents
+- [ ] test pre-hook
+  - context adding
+  - chat history injection
 - [ ] adding tool calls
-- [ ] chat history injection
-
-## Project
-
-- initially in `src/mono_llm.nim` I wanted to create a standardized interface for all LLMs. However I've since realized that everything is pretty much standardizing on OpenAI's API. So I'm going to focus on that for now.
+- [ ] test post-hook
