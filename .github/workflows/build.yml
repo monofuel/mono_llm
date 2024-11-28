@@ -19,3 +19,4 @@ jobs:
         nimble test -y
         nimble test --gc:orc -y
         nim c examples/proxy.nim
+        nim c examples/simple_agent.nim

@@ -1,6 +1,6 @@
 import mono_llm
 
-# Simplelogging  proxy example for mono_llm
+# Simple logging proxy example for mono_llm
 
 let
   endpoint = "https://api.openai.com/v1"
@@ -14,7 +14,7 @@ let gateway = newOpenAIGateway(
   address,
   port,
   logFile
-  )
+)
 
 
 gateway.start()
