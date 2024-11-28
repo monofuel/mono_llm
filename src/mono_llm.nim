@@ -286,6 +286,7 @@ proc start*(gateway: OpenAIGateway) =
     # finalize message
     let respJson = fromJson(resp.body)
     respJson["choices"][0]["message"]["content"] = %respStr
+    echo &"FINAL RESPONSE: {respJson}"
 
     # TODO fix headers
 
