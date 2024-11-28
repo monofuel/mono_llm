@@ -1,4 +1,4 @@
-import std/[strformat, tables, json, parseopt, envvars, strutils],
+import std/[strformat, options, tables, json, parseopt, envvars, strutils],
   curly, jsony, mummy, mummy/routers, openai_leap
 
 ## OpenAI Compatible Gateway
@@ -15,7 +15,7 @@ import std/[strformat, tables, json, parseopt, envvars, strutils],
 export openai_leap.ToolFunction
 
 type
-  ToolImpl* = proc (args: JsonNode): string
+  ToolImpl* = proc (args: JsonNode): string {.gcsafe.}
   PreHook* = proc (req: JsonNode) {.gcsafe.}
   PostHook* = proc (req: JsonNode, resp: JsonNode) {.gcsafe.}
   Agent* = ref object of RootObj
@@ -132,7 +132,7 @@ proc start*(gateway: OpenAIGateway) =
     request.respond(resp.code, resp.headers, resp.body)
     gateway.logRequest(request, resp)
 
-  proc chatHandler(request: Request) =
+  proc chatHandler(request: Request) {.gcsafe.} =
     ## proxy POST /chat/completions
     echo &"{request.httpMethod} {request.path}"
     var headers: HttpHeaders
@@ -166,8 +166,6 @@ proc start*(gateway: OpenAIGateway) =
       agent = gateway.agents[agentName]
 
       if agent.systemPrompt != "":
-        # find the system prompt first message
-        var systemPrompt: openai_leap.Message
         if not reqJson.hasKey("messages") or reqJson["messages"].len == 0:
           raise newException(ApiGatewayError, "Messages not specified")
         
@@ -226,17 +224,74 @@ proc start*(gateway: OpenAIGateway) =
     #else:
 
     # not streaming
-    let resp = openAI.post("/chat/completions", toJson(reqJson), Opts(bearerToken: bearerToken, organization: organization))
+    var respStr = ""
+    var resp: Response
+    var toolbatch: seq[ToolResp]
+    while true:
+      toolbatch = @[]
+      resp = openAI.post("/chat/completions", toJson(reqJson), Opts(bearerToken: bearerToken, organization: organization))
+      gateway.logRequest(request, resp)
+      # handle the tool calls that the gateway agent added
+      # TODO handle tools provided by the client, not just from the gateway
+      let respMessage = fromJson(resp.body, openai_leap.CreateChatCompletionResp)
+      if respMessage.choices[0].message.isNone:
+        # TODO support respMessage.delta
+        raise newException(ApiGatewayError, "No message in response")
 
-    echo resp.body
+      if respMessage.choices[0].message.get.tool_calls.isSome:
+        toolbatch = respMessage.choices[0].message.get.tool_calls.get
 
-    # TODO handle tool calls we injected
-    # may need to make multiple requests to the API.
+      var messages = reqJson["messages"].getElems
+      if respStr != "":
+        respStr &= "\n"
+      respStr &= respMessage.choices[0].message.get.content
+      messages.add(%openai_leap.Message(
+        role: "assistant",
+        tool_calls: option(toolbatch),
+        content: option(
+          @[MessageContentPart(`type`: "text", text: option(
+            respMessage.choices[0].message.get.content
+          ))]
+        )
+      ))
 
-    request.respond(resp.code, resp.headers, resp.body)
-    gateway.logRequest(request, resp)
+      if toolBatch.len == 0:
+        break
+
+
+      for tool in toolbatch:
+        # Iterate over the tool call requests and execute the tool functions
+        # TODO: it would be nice to handle these calls in parallel
+        let toolFunc = tool.function
+        let toolFn = agent.toolFns[toolFunc.name]
+        let toolFuncArgs = fromJson(toolFunc.arguments)
+        try:
+          echo &"calling tool: {toolFunc.name}"
+          let toolResult = toolFn(toolFuncArgs) # execute the provided tool function
+          let toolMsg = %openai_leap.Message(
+            role: "tool",
+            content: option(
+              @[MessageContentPart(`type`: "text", text: option(
+                toolResult
+              ))]
+              ),
+            tool_call_id: option(tool.id)
+          )
+          messages.add(toolMsg)
+        except CatchableError as e:
+          raise newException(ApiGatewayError, "Tool function failed: " & e.msg)
+      # Update the request with additional messages and tools
+      reqJson["messages"] = %messages
+
+    # finalize message
+    let respJson = fromJson(resp.body)
+    respJson["choices"][0]["message"]["content"] = %respStr
+
+    # TODO fix headers
+
+    request.respond(resp.code, headers, toJson(respJson))
     if agent != nil and agent.postAgentHook != nil:
-      agent.postAgentHook(reqJson, fromJson(resp.body))
+      agent.postAgentHook(reqJson, respJson)
 
   # setup routes
   router.get("/_health", healthHandler)
@@ -272,7 +327,6 @@ when isMainModule:
     of cmdEnd:
       discard
 
-  echo address
   let gateway = newOpenAIGateway(
     endpoint,
     address,

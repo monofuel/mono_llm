@@ -20,7 +20,6 @@ proc getFlightTimes(args: JsonNode): string =
   ## takes in a json object with departure and arrival city codes
   ## returns a string of a json object with the flight times
   functionCallCount += 1
-  echo "getFlightTimes"
   echo "DEBUG: getFlightTimes called with " & toJson(args)
   let departure = args["departure"].getStr
   let arrival = args["arrival"].getStr
@@ -77,28 +76,22 @@ proc newTestAgent*(): TestAgent =
   result.postAgentHook = postAgentHook
 
 suite "llm agents":
-  var openAI: OpenAiApi
-  setup:
-    openAI = newOpenAiApi(&"http://{TestAddress}:{TestPort}")
+  var openAI = newOpenAiApi(&"http://{TestAddress}:{TestPort}")
+  gateway = newOpenAIGateway(
+    "https://api.openai.com/v1",
+    TestAddress,
+    TestPort,
+  )
+  gateway.addAgent(newTestAgent())
 
-    gateway = newOpenAIGateway(
-      "https://api.openai.com/v1",
-      TestAddress,
-      TestPort,
-    )
-
-    gateway.addAgent(newTestAgent())
-
-    proc startGateway() {.thread.} =
-      {.gcsafe.}:
-        gateway.start()
-
-    createThread(serverThread, startGateway)
-    # HACK wait for the server to start
-    sleep(1000)
+  proc startGateway() {.thread.} =
+    {.gcsafe.}:
+      gateway.start()
+  createThread(serverThread, startGateway)
+  # HACK wait for the server to start
+  sleep(1000)
 
   test "single tool":
-    echo TestModel
     preHookCount = 0
     postHookCount = 0
     functionCallCount = 0
@@ -114,6 +107,7 @@ suite "llm agents":
       ],
     )
     let resp = openAI.createChatCompletion(chat)
+    echo "foo"
     echo resp.choices[0].message.get.content
     assert preHookCount == 1
     assert postHookCount == 1
