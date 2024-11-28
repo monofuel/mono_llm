@@ -9,7 +9,7 @@
 
 - you can also import the gateway package and extend it to create your own gateway with additional features
 ```nim
-import mono_llm/gateway
+import mono_llm
 
 let gateway = createOpenAIGateway("https://api.openai.com/v1", "0.0.0.0",8085)
 startOpenAIGateway(gateway)
@@ -33,6 +33,7 @@ startOpenAIGateway(gateway)
 - [ ] defining agents
 - [ ] adding context
 - [ ] adding tool calls
+- [ ] chat history injection
 
 ## Project
 
