@@ -172,14 +172,14 @@ proc startOpenAIGateway*(gateway: OpenAIGateway) =
         if firstMessage["role"].str == "system":
           if agent.overrideSystemPrompt:
             # override the system prompt
-            firstMessage["content"] = agent.systemPrompt
+            firstMessage["content"] = %agent.systemPrompt
           elif agent.appendSystemPrompt:
             # append the system prompt
             # TODO test if this is a message content part
-            firstMessage["content"] &= agent.systemPrompt
+            firstMessage["content"] &= %agent.systemPrompt
         else:
           # insert our special system prompt as the first message
-          let promptMsg = %{
+          let promptMsg = %*{
             "role": "system",
             "content": agent.systemPrompt
           }
