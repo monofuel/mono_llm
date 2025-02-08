@@ -1,4 +1,3 @@
-
 # Deprecated: older abstraction code
 # everything seems to be standardizing on openai, so let's not mess with all these other providers.
 
@@ -30,6 +29,7 @@ type
   ToolCall* = ref object
     name*: string
     arguments*: string # JSON string of arguments
+    tool_call_id*: string  # id of the tool call
   ChatMessage* = ref object
     role*: Role
     name*: Option[string]
@@ -37,6 +37,7 @@ type
     images*: Option[seq[string]]       # sequence of base64 encoded images
     imageUrls*: Option[seq[string]]    # sequence of urls to images
     Tools*: Option[seq[ToolCall]]  # Tools the LLM is calling
+    tool_call_id*: Option[string]  # id of the tool call
   ChatExample* = ref object
     input*: ChatMessage
     output*: ChatMessage
@@ -125,6 +126,7 @@ proc lastMessage*(ch: Chat): string =
 
 type MonoLLMConfig* = object
   ollamaBaseUrl*: string
+  openAIBaseUrl*: string
   gcpCredentials*: Option[GCPCredentials]
   openAIKey*: string
 
@@ -135,7 +137,7 @@ proc newMonoLLM*(config: MonoLLMConfig): MonoLLM =
 
 
   if config.openAIKey != "":
-    result.openai = newOpenAiApi(apiKey = config.openAIKey)
+    result.openai = newOpenAiApi(baseUrl = config.openAIBaseUrl, apiKey = config.openAIKey)
   if getEnv("OPENAI_API_KEY").len > 0:
     # openai_leap loads from OPENAI_API_KEY by default
     result.openai = newOpenAiApi()
@@ -168,31 +170,69 @@ proc generateOpenAIChat(llm: MonoLLM, chat: Chat, tools: seq[Tool] = @[], toolFn
   for msg in chat.messages:
 
     var contentParts: seq[MessageContentPart]
-    if msg.content.isSome:
-      contentParts.add(MessageContentPart(
-        `type`: "text",
-        text: msg.content
-      ))
-    if msg.imageUrls.isSome:
-      for url in msg.imageUrls.get:
-        let imageUrl = ImageUrlPart(
-          url: url
-        )
-        contentParts.add(MessageContentPart(
-          `type`: "image_url",
-          image_url: option(imageUrl)
-        ))
-    if msg.images.isSome:
-      if msg.images.get.len > 0:
-        # TODO implement non-url images for openai api
-        # could either: run a web server and service the image, or use the 'create upload' api
-        # would need to keep track of what images have been uploaded
-        raise newException(Exception, "OpenAI image upload not implemented yet, please use image_url for now")
-
-    messages.add(openai_leap.Message(
+    var newMsg = openai_leap.Message(
       role: $msg.role,
       content: option(contentParts)
-    ))
+    )
+
+    if msg.role == Role.user:
+      if msg.content.isSome:
+        contentParts.add(MessageContentPart(
+          `type`: "text",
+          text: msg.content
+        ))
+      if msg.imageUrls.isSome:
+        for url in msg.imageUrls.get:
+          let imageUrl = ImageUrlPart(
+            url: url
+          )
+          contentParts.add(MessageContentPart(
+            `type`: "image_url",
+            image_url: option(imageUrl)
+          ))
+      if msg.images.isSome:
+        if msg.images.get.len > 0:
+          # TODO implement non-url images for openai api
+          # could either: run a web server and service the image, or use the 'create upload' api
+          # would need to keep track of what images have been uploaded
+          raise newException(Exception, "OpenAI image upload not implemented yet, please use image_url for now")
+
+    elif msg.role == Role.tool:
+      if msg.content.isSome:
+        contentParts.add(MessageContentPart(
+          `type`: "text",
+          text: msg.content
+        ))
+      newMsg.tool_call_id = msg.tool_call_id
+    elif msg.role == Role.assistant:
+      if msg.content.isSome:
+        contentParts.add(MessageContentPart(
+          `type`: "text",
+          text: msg.content
+        ))
+      elif msg.Tools.isSome:
+        # convert mono_llm tool calls to openai tool calls
+        var toolCalls: seq[ToolResp]
+        for t in msg.Tools.get:
+          toolCalls.add(ToolResp(
+            id: t.tool_call_id,
+            `type`: "function",
+            function: ToolFunctionResp(
+              name: t.name,
+              arguments: t.arguments
+            )
+          ))
+        newMsg.tool_calls = option(toolCalls)
+    elif msg.role == Role.system:
+      if msg.content.isSome:
+        contentParts.add(MessageContentPart(
+          `type`: "text",
+          text: msg.content
+        ))
+
+    newMsg.content = option(contentParts)
+    messages.add(newMsg)
+      
 
   var gptTools: seq[openai_leap.Tool]
   for tool in tools:
@@ -251,6 +291,22 @@ proc generateOpenAIChat(llm: MonoLLM, chat: Chat, tools: seq[Tool] = @[], toolFn
         )
       ])
     ))
+    
+    # Convert OpenAI tool calls to mono_llm format
+    var monoToolCalls: seq[ToolCall]
+    for toolCallReq in toolMsg.tool_calls.get:
+      monoToolCalls.add(ToolCall(
+        name: toolCallReq.function.name,
+        arguments: toolCallReq.function.arguments,
+        tool_call_id: toolCallReq.id
+      ))
+
+    # Add assistant's tool use message to chat history
+    chat.messages.add(ChatMessage(
+      role: Role.assistant,
+      content: option(resp.choices[0].message.get.content),
+      Tools: option(monoToolCalls)
+    ))
 
     for toolCallReq in toolMsg.tool_calls.get:
       # Iterate over the tool call requests and execute the tool functions
@@ -269,6 +325,12 @@ proc generateOpenAIChat(llm: MonoLLM, chat: Chat, tools: seq[Tool] = @[], toolFn
               ),
             tool_call_id: option(toolCallReq.id)
           ))
+        chat.messages.add(ChatMessage(
+          role: Role.tool,
+          content: option(toolResult),
+          tool_call_id: option(toolCallReq.id)
+          ),
+        )
       except CatchableError as e:
         # if the tool function fails, we should return an error message
         messages.add(Message(
@@ -278,6 +340,11 @@ proc generateOpenAIChat(llm: MonoLLM, chat: Chat, tools: seq[Tool] = @[], toolFn
               "Error executing tool function: " & e.msg
             ))]
           ),
+          tool_call_id: option(toolCallReq.id)
+        ))
+        chat.messages.add(ChatMessage(
+          role: Role.tool,
+          content: option("Error executing tool function: " & e.msg),
           tool_call_id: option(toolCallReq.id)
         ))
 
